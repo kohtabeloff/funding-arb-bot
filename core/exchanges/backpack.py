@@ -164,6 +164,7 @@ class BackpackExecutor(BaseExchangeExecutor):
 
     async def market_close(self, symbol: str, size: float = 0, was_long: bool = True) -> dict:
         bp_symbol = self._bp_symbol(symbol)
+        mark_price = await self.get_mark_price(symbol)
 
         if size > 0:
             # Размер известен — закрываем по нему
@@ -202,7 +203,7 @@ class BackpackExecutor(BaseExchangeExecutor):
         if resp.status_code not in (200, 201):
             raise RuntimeError(f"Backpack ошибка закрытия: {result}")
 
-        exit_price = float(result.get("avgPrice") or result.get("price") or 0)
+        exit_price = float(result.get("avgPrice") or result.get("price") or mark_price)
         fees_paid = float(result.get("fee") or 0)
         logger.info(f"Backpack: закрыта позиция {symbol}, qty={abs(qty)}, price={exit_price}")
         return {"symbol": symbol, "closed_qty": abs(qty), "price": exit_price, "fee": fees_paid}

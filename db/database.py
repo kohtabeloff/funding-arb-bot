@@ -198,6 +198,30 @@ async def save_funding_snapshot(rates_by_exchange: dict):
         await db.commit()
 
 
+async def get_avg_rate_since(exchange: str, symbol: str, since_ts: float) -> float | None:
+    """Возвращает средний rate для символа на бирже с момента since_ts.
+    Используется для расчёта заработанного по открытой позиции."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+            SELECT AVG(rate) FROM funding_history
+            WHERE exchange = ? AND symbol = ? AND timestamp >= ?
+        """, (exchange, symbol, since_ts)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row and row[0] is not None else None
+
+
+async def get_avg_rate_between(exchange: str, symbol: str, from_ts: float, to_ts: float) -> float | None:
+    """Возвращает средний rate для символа на бирже за период from_ts..to_ts.
+    Используется для расчёта заработанного по закрытой позиции."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+            SELECT AVG(rate) FROM funding_history
+            WHERE exchange = ? AND symbol = ? AND timestamp >= ? AND timestamp <= ?
+        """, (exchange, symbol, from_ts, to_ts)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row and row[0] is not None else None
+
+
 async def get_funding_stats(hours: int = 24) -> list[dict]:
     since = time.time() - hours * 3600
     async with aiosqlite.connect(DB_PATH) as db:

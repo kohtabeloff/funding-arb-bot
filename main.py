@@ -30,7 +30,7 @@ from db.database import (
     init_db, save_funding_snapshot,
     get_open_pairs, get_positions_by_pair, get_closed_pairs, count_closed_pairs,
     get_position_by_id, mark_position_closed,
-    save_setting, load_setting,
+    save_setting, load_setting, get_avg_rate_since, get_avg_rate_between,
 )
 
 logging.basicConfig(
@@ -513,9 +513,11 @@ async def show_positions(update: Update):
                 apr_str = f"<code>{rate.apr:+.1f}%</code>" if rate else "<i>?</i>"
                 lines.append(f"  {leg['exchange']} ({dir_label}): <code>${leg['entry_price']:.4f}</code> APR: {apr_str}")
 
-                if rate:
+                avg_rate = await get_avg_rate_since(leg["exchange"], symbol, legs[0]["opened_at"])
+                use_rate = avg_rate if avg_rate is not None else (rate.rate if rate else None)
+                if use_rate is not None:
                     sign = 1 if leg["direction"] == "SHORT" else -1
-                    earned = sign * rate.rate * opened_ago * leg["position_size_usd"]
+                    earned = sign * use_rate * opened_ago * leg["position_size_usd"]
                     total_earned += earned
                     has_earnings = True
 
@@ -540,7 +542,9 @@ async def show_positions(update: Update):
             label = "шорт" if pos.get("direction") == "SHORT" else "лонг"
             rate = rates_map.get(f"{pos['exchange']}:{pos['symbol']}")
             current_apr = abs(rate.apr) if rate else 0
-            earned = abs(rate.rate if rate else 0) * opened_ago * pos["position_size_usd"]
+            avg_rate = await get_avg_rate_since(pos["exchange"], pos["symbol"], pos["opened_at"])
+            use_rate = avg_rate if avg_rate is not None else (rate.rate if rate else 0)
+            earned = abs(use_rate) * opened_ago * pos["position_size_usd"]
             status = "🟢" if current_apr >= 100 else "🟡" if current_apr >= 30 else "🔴"
 
             text = (
@@ -699,11 +703,28 @@ async def _build_history_page(page: int) -> tuple:
         total_fees = sum(l.get("fees_usd") or 0 for l in legs)
         total_usd = sum(l.get("position_size_usd", 0) for l in legs)
 
-        pnl_emoji = "🟢" if total_pnl >= 0 else "🔴"
+        # Считаем фандинг по каждой ноге за время жизни позиции
+        total_funding = 0.0
+        has_funding = False
+        opened_at = legs[0].get("opened_at") or 0
+        for leg in legs:
+            avg_rate = await get_avg_rate_between(leg["exchange"], symbol, opened_at, closed_at or time.time())
+            if avg_rate is not None:
+                opened_ago_h = (closed_at - opened_at) / 3600 if closed_at and opened_at else 0
+                sign = 1 if leg["direction"] == "SHORT" else -1
+                total_funding += sign * avg_rate * opened_ago_h * leg["position_size_usd"]
+                has_funding = True
+
+        total_result = total_pnl + total_funding - total_fees
+        result_emoji = "🟢" if total_result >= 0 else "🔴"
+
+        funding_str = f" | Фандинг: <code>{total_funding:+.4f}</code>" if has_funding else ""
+        result_str = f" | Итого: <code>{total_result:+.4f}</code>" if has_funding else ""
+
         lines.append(
-            f"{pnl_emoji} <b>{symbol}</b> — {exch_names}\n"
-            f"  💵 ${total_usd:.0f} | P&L: <code>${total_pnl:.4f}</code> | Комиссии: <code>${total_fees:.4f}</code>\n"
-            f"  ⏱ {ago_h:.0f}ч назад"
+            f"{result_emoji} <b>{symbol}</b> — {exch_names}\n"
+            f"  💵 ${total_usd:.0f} | P&L: <code>{total_pnl:+.4f}</code>{funding_str}{result_str}\n"
+            f"  💸 Комиссии: <code>-{total_fees:.4f}</code> | ⏱ {ago_h:.0f}ч назад"
         )
 
     nav_btns = []

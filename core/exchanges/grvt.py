@@ -227,10 +227,14 @@ class GRVTExecutor(BaseExchangeExecutor):
             if isinstance(balance, dict):
                 usdt = balance.get("USDT", {})
                 if isinstance(usdt, dict):
-                    return float(usdt.get("free") or usdt.get("available") or 0)
+                    val = usdt.get("total") or usdt.get("free") or usdt.get("available")
+                    if val:
+                        return float(val)
                 total = balance.get("total", {})
                 if isinstance(total, dict):
-                    return float(total.get("USDT") or 0)
+                    val = total.get("USDT")
+                    if val:
+                        return float(val)
             return None
         except Exception as e:
             logger.warning(f"GRVT get_balance ошибка: {e}")

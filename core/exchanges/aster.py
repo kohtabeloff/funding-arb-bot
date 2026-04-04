@@ -315,7 +315,7 @@ class AsterExecutor(BaseExchangeExecutor):
             for item in data:
                 asset = item.get("asset", "")
                 if asset in ("USDT", "USDC"):
-                    return float(item.get("availableBalance") or item.get("balance") or 0)
+                    return float(item.get("balance") or item.get("availableBalance") or 0)
             return 0.0
         except Exception as e:
             logger.warning(f"Aster get_balance ошибка: {e}")
