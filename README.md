@@ -1,257 +1,262 @@
 # Funding Arbitrage Bot
 
-Telegram-бот для дельта-нейтральной стратегии на крипто перп-биржах.
+> 🇷🇺 [Русская версия](README_RU.md)
 
-**Стратегия:** открываем лонг на одной бирже и шорт на другой — зарабатываем на разнице funding rate. Рыночный риск нейтральный.
+A Telegram bot for delta-neutral funding rate arbitrage on crypto perpetual exchanges.
 
-**Поддерживаемые биржи:**
+**Strategy:** open a long on one exchange and a short on another — earn the funding rate spread while staying market-neutral.
+
+**Supported exchanges:**
 - Backpack
 - Lighter
 - Hyperliquid
 - GRVT
 - Aster
 
-Любая биржа может быть спарена с любой другой — бот сам находит лучшие комбинации.
+Any exchange can be paired with any other — the bot finds the best combinations automatically.
 
 ---
 
-## ⚠️ Отказ от ответственности
+## ⚠️ Disclaimer
 
-Этот бот предоставляется бесплатно, как есть. Автор **не несёт ответственности** за потерю средств, технические сбои, изменения в API бирж или любые другие последствия использования бота. Торговля криптовалютой сопряжена с рисками — вы действуете на свой страх и риск.
+This bot is provided free of charge, as is. The author **takes no responsibility** for loss of funds, technical failures, exchange API changes, or any other consequences of using the bot. Crypto trading involves risk — you act at your own discretion.
 
-**Рекомендация:** перед использованием прогони код через любую нейросеть (ChatGPT, Claude, Gemini) и попроси проверить его на безопасность и корректность. Это займёт 5 минут и даст дополнительную уверенность.
-
----
-
-## Помощь с настройкой
-
-Если что-то не получается — открой [Claude Code](https://claude.ai/code) или [ChatGPT](https://chatgpt.com) прямо в папке с ботом. Нейросеть поможет разобраться с любым шагом установки, объяснит ошибки и подскажет как их исправить.
+**Recommendation:** before using, paste the code into any AI (ChatGPT, Claude, Gemini) and ask it to review for safety and correctness. Takes 5 minutes and gives extra confidence.
 
 ---
 
-## Содержание
+## Getting help
 
-1. [Что понадобится](#1-что-понадобится)
-2. [Покупка VPS](#2-покупка-vps)
-3. [Получение API ключей](#3-получение-api-ключей)
-4. [Создание Telegram-бота](#4-создание-telegram-бота)
-5. [Установка бота на VPS](#5-установка-бота-на-vps)
-6. [Настройка .env](#6-настройка-env)
-7. [Запуск](#7-запуск)
-8. [Автозапуск при перезагрузке сервера](#8-автозапуск-при-перезагрузке-сервера)
-9. [Как пользоваться](#9-как-пользоваться)
+If something doesn't work — open [Claude Code](https://claude.ai/code) or [ChatGPT](https://chatgpt.com) directly in the bot folder. The AI will help with any installation step, explain errors, and suggest fixes.
 
 ---
 
-## 1. Что понадобится
+## Table of Contents
 
-- VPS сервер (Linux, Ubuntu 22.04+)
-- Аккаунты на биржах: Backpack, Lighter, Hyperliquid, GRVT, Aster (можно не все — бот работает с любым набором)
-- Telegram-бот (создаётся через BotFather за 1 минуту)
-- Стартовый капитал: от ~$100 (минимум $10–15 на ногу для тестирования)
+1. [What you need](#1-what-you-need)
+2. [Getting a VPS](#2-getting-a-vps)
+3. [Getting API keys](#3-getting-api-keys)
+4. [Creating a Telegram bot](#4-creating-a-telegram-bot)
+5. [Installing the bot on VPS](#5-installing-the-bot-on-vps)
+6. [Configuring .env](#6-configuring-env)
+7. [Running](#7-running)
+8. [Auto-start on reboot](#8-auto-start-on-reboot)
+9. [How to use](#9-how-to-use)
 
 ---
 
-## 2. Покупка VPS
+## 1. What you need
 
-VPS — это удалённый сервер в интернете, на котором будет круглосуточно работать бот. Без него бот будет работать только пока открыт твой компьютер.
+- VPS server (Linux, Ubuntu 22.04+)
+- Accounts on exchanges: Backpack, Lighter, Hyperliquid, GRVT, Aster (not all required — the bot works with any subset)
+- Telegram bot (created via BotFather in 1 minute)
+- Starting capital: from ~$100 (minimum $10–15 per leg for testing)
 
-### Минимальные требования
-| Параметр | Минимум |
-|----------|---------|
+---
+
+## 2. Getting a VPS
+
+A VPS is a remote server that runs your bot 24/7. Without it, the bot only works while your computer is on.
+
+### Minimum requirements
+| Parameter | Minimum |
+|-----------|---------|
 | CPU | 1 vCPU |
 | RAM | 1 GB |
-| Диск | 10 GB SSD |
-| ОС | Ubuntu 22.04 LTS |
-| Python | 3.10+ (рекомендуется 3.11) |
+| Disk | 10 GB SSD |
+| OS | Ubuntu 22.04 LTS |
+| Python | 3.10+ (3.11 recommended) |
 
-> **Важно:** выбирай сервер **за пределами России** (Нидерланды, Финляндия, Германия) — некоторые биржи блокируют российские IP.
+> **Important:** choose a server **outside Russia** (Netherlands, Finland, Germany) — some exchanges block Russian IPs.
 
-### Где купить (оплата картой РФ или криптой)
+### Where to buy (card or crypto)
 
-- **[Beget](https://beget.com/p2553787)** — карты РФ, серверы в Европе, тариф «Минимальный» подойдёт
-- **[Aeza](https://aeza.net/?ref=814571)** — крипта, серверы в Европе
-- **[TimeWeb Cloud](https://timeweb.cloud/r/ce50036)** — карты РФ, есть локации за рубежом
+- **[Vultr](https://www.vultr.com/)** — card or crypto, servers worldwide
+- **[Hetzner](https://www.hetzner.com/)** — reliable, affordable, European servers
+- **[DigitalOcean](https://www.digitalocean.com/)** — beginner-friendly
 
 ---
 
-## 3. Получение API ключей
+## 3. Getting API keys
 
 ### Backpack
-1. Регистрация: [Backpack](https://backpack.exchange/join/65d923ff-b224-4dfb-aa6c-cd5346c77651)
-2. Пройди KYC
-3. Пополни счёт (USDC)
-4. Создай API ключ: **Settings → API Keys → Create API Key**
-   - Назови как угодно, например `arb-bot`
-   - Включи разрешения: `Order` (чтение + торговля)
-   - Сохрани `API Key` и `Secret Key`
+1. Sign up: [Backpack](https://backpack.exchange/join/65d923ff-b224-4dfb-aa6c-cd5346c77651)
+2. Complete KYC
+3. Deposit funds (USDC)
+4. Create API key: **Settings → API Keys → Create API Key**
+   - Give it a name, e.g. `arb-bot`
+   - Enable permissions: `Order` (read + trade)
+   - Save `API Key` and `Secret Key`
 
 ### Lighter
-1. Регистрация: [Lighter](https://app.lighter.xyz/?referral=KOHTA) (подключи EVM-кошелёк, например MetaMask)
-2. Пополни счёт (USDC через Arbitrum)
-3. Создай API ключ: **Settings → API Keys → Generate API Key**
-   - В поле `API Key Index` введи `2` (0 и 1 зарезервированы)
-   - Нажми `Generate`
-   - Сохрани `Private Key`
-4. Запомни `Account Index` — виден в настройках аккаунта
+1. Sign up: [Lighter](https://app.lighter.xyz/?referral=KOHTA) (connect an EVM wallet, e.g. MetaMask)
+2. Deposit USDC via Arbitrum
+3. Create API key: **Settings → API Keys → Generate API Key**
+   - Set `API Key Index` to `2` (0 and 1 are reserved)
+   - Click `Generate`
+   - Save the `Private Key`
+4. Note your `Account Index` — visible in account settings
 
 ### Hyperliquid
-1. Регистрация: [Hyperliquid](https://app.hyperliquid.xyz/join/KOHTA)
-2. Пополни счёт (USDC через Arbitrum)
-3. Отдельных API ключей у Hyperliquid нет — бот работает через приватный ключ EVM-кошелька
+1. Sign up: [Hyperliquid](https://app.hyperliquid.xyz/join/KOHTA)
+2. Deposit USDC via Arbitrum
+3. Hyperliquid has no separate API keys — the bot uses your EVM wallet private key
 
-   > 💡 **Рекомендуется: API Wallet (агент-ключ)**
+   > 💡 **Recommended: API Wallet (agent key)**
    >
-   > Вместо приватного ключа основного кошелька создай **API Wallet** — это отдельный ключ только с правами на торговлю, без доступа к выводу средств. Гораздо безопаснее.
+   > Instead of your main wallet's private key, create an **API Wallet** — a separate key with trading rights only, no withdrawal access. Much safer.
    >
-   > Как создать: **More → API → Generate API Wallet** → сохрани приватный ключ агента. В `.env` вставь именно его в `HYPERLIQUID_PRIVATE_KEY`, а в `WALLET_ADDRESS` — адрес **основного** кошелька.
+   > How to create: **More → API → Generate API Wallet** → save the agent private key. Put it in `HYPERLIQUID_PRIVATE_KEY` in `.env`, and put your **main** wallet address in `WALLET_ADDRESS`.
 
-   Если используешь ключ основного кошелька: MetaMask → три точки у аккаунта → `Account details` → `Export private key`. Лучше завести отдельный кошелёк только для торговли.
+   If using your main wallet key: MetaMask → three dots on account → `Account details` → `Export private key`. Better to use a dedicated trading wallet.
 
 ### GRVT
-1. Регистрация: [GRVT](https://grvt.io/exchange/earn-on-equity?ref=BNZ8NKI)
-2. Пополни счёт
-3. Создай API ключ: **Settings → API Keys → Create API Key**
-   - Убедись что разрешение `Trade` включено
-   - Сохрани `API Key`
-4. Запомни `Trading Account ID` — виден в URL или в настройках sub-account
-5. Приватный ключ — тот же EVM-кошелёк, которым управляешь аккаунтом GRVT
+1. Sign up: [GRVT](https://grvt.io/exchange/earn-on-equity?ref=BNZ8NKI)
+2. Deposit funds
+3. Create API key: **Settings → API Keys → Create API Key**
+   - Make sure `Trade` permission is enabled
+   - Save `API Key`
+4. Note your `Trading Account ID` — visible in the URL or sub-account settings
+5. Private key — the same EVM wallet you use to manage your GRVT account
 
 ### Aster
-1. Регистрация: [Aster](https://www.asterdex.com/en/referral/rLfLbr)
-2. Пополни счёт (USDC)
-3. Создай API ключ: **Account → API Management → Create API Key**
-   - Включи разрешение на торговлю
-   - Сохрани `API Key` и `Secret Key`
+1. Sign up: [Aster](https://www.asterdex.com/en/referral/rLfLbr)
+2. Deposit USDC
+3. Create API key: **Account → API Management → Create API Key**
+   - Enable trading permission
+   - Save `API Key` and `Secret Key`
 
 ---
 
-## 4. Создание Telegram-бота
+## 4. Creating a Telegram bot
 
-1. Открой [@BotFather](https://t.me/BotFather) в Telegram
-2. Напиши `/newbot`
-3. Придумай название и username (например `my_arb_bot`)
-4. BotFather выдаст **токен** — сохрани его
-5. Узнай свой `chat_id`: напиши [@userinfobot](https://t.me/userinfobot) — он ответит твоим ID
+1. Open [@BotFather](https://t.me/BotFather) in Telegram
+2. Send `/newbot`
+3. Choose a name and username (e.g. `my_arb_bot`)
+4. BotFather will give you a **token** — save it
+5. Get your `chat_id`: message [@userinfobot](https://t.me/userinfobot) — it will reply with your ID
 
 ---
 
-## 5. Установка бота на VPS
+## 5. Installing the bot on VPS
 
-### Подключение к серверу
+### Connecting to the server
 
-После покупки VPS тебе дадут IP-адрес, логин и пароль. Подключиться к серверу нужно через SSH.
+After purchasing a VPS you'll receive an IP address, login, and password. Connect via SSH.
 
-**Mac / Linux** — открой Терминал и введи:
+**Mac / Linux** — open Terminal and run:
 ```bash
-ssh root@ВАШ_IP
+ssh root@YOUR_IP
 ```
-Введи пароль когда попросит (при вводе символы не отображаются — это нормально).
+Enter the password when prompted (characters won't show while typing — that's normal).
 
-**Windows** — открой PowerShell (Win+R → powershell) и введи ту же команду. Либо скачай [PuTTY](https://putty.org).
+**Windows** — open PowerShell (Win+R → powershell) and run the same command. Or download [PuTTY](https://putty.org).
 
-> 💡 Если не получается — спроси у нейросети: «как подключиться к VPS по SSH с Windows/Mac».
+> 💡 If stuck — ask an AI: "how to connect to VPS via SSH from Windows/Mac".
 
 ---
 
-После подключения выполняй команды по одной:
+Run commands one by one after connecting:
 
-### Обновление системы
+### Update the system
 ```bash
 sudo apt update && sudo apt upgrade -y
 ```
 
-### Установка Python и Git
+### Install Python and Git
 ```bash
 sudo apt install python3.11 python3.11-venv python3-pip git -y
 ```
 
-### Скачивание бота
+### Download the bot
 ```bash
 cd ~
 git clone https://github.com/kohtabeloff/funding-arb-bot.git
 cd funding-arb-bot
 ```
 
-### Создание виртуального окружения
+### Create virtual environment
 ```bash
 python3.11 -m venv venv
 source venv/bin/activate
 ```
 
-### Установка зависимостей
+### Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
 ---
 
-## 6. Настройка .env
+## 6. Configuring .env
 
-Создай файл с настройками на основе примера:
+Create the config file from the example:
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-Заполни нужные поля (биржи, которые не используешь, можно оставить пустыми):
+Fill in the required fields (exchanges you don't use can be left empty):
 
 ```env
 # Telegram
-TELEGRAM_TOKEN=токен_от_BotFather
-TELEGRAM_CHAT_ID=твой_chat_id
+TELEGRAM_TOKEN=your_bot_token
+TELEGRAM_CHAT_ID=your_chat_id
 
-# Стратегия
-MIN_PAIR_APR=50             # минимальный нетто APR для сигнала о паре (%)
-SCAN_INTERVAL_SECONDS=60    # как часто сканировать рынок (секунды)
-POSITION_SIZE_USD=100       # размер одной ноги по умолчанию (USD)
+# Bot language: en or ru
+BOT_LANG=en
+
+# Strategy
+MIN_PAIR_APR=50             # minimum net APR for a pair signal (%)
+SCAN_INTERVAL_SECONDS=60    # how often to scan (seconds)
+POSITION_SIZE_USD=100       # default position size per leg (USD)
 
 # Backpack
-BACKPACK_API_KEY=           # API Key из настроек Backpack
-BACKPACK_API_SECRET=        # Secret Key из настроек Backpack
+BACKPACK_API_KEY=
+BACKPACK_API_SECRET=
 
 # Lighter
-LIGHTER_API_PRIVATE_KEY=    # Private Key из настроек Lighter
-LIGHTER_API_KEY_INDEX=2     # индекс ключа (обычно 2)
-LIGHTER_ACCOUNT_INDEX=0     # Account Index твоего аккаунта
+LIGHTER_API_PRIVATE_KEY=
+LIGHTER_API_KEY_INDEX=2
+LIGHTER_ACCOUNT_INDEX=0
 
 # Hyperliquid
-HYPERLIQUID_PRIVATE_KEY=    # приватный ключ EVM-кошелька (0x...)
-WALLET_ADDRESS=             # адрес EVM-кошелька (0x...)
+HYPERLIQUID_PRIVATE_KEY=
+WALLET_ADDRESS=
 
 # GRVT
-GRVT_API_KEY=               # API Key из настроек GRVT
-GRVT_PRIVATE_KEY=           # приватный ключ EVM-кошелька (0x...)
-GRVT_TRADING_ACCOUNT_ID=    # Trading Account ID (числовой)
+GRVT_API_KEY=
+GRVT_PRIVATE_KEY=
+GRVT_TRADING_ACCOUNT_ID=
 
 # Aster
-ASTER_API_KEY=              # API Key из настроек Aster
-ASTER_API_SECRET=           # Secret Key из настроек Aster
+ASTER_API_KEY=
+ASTER_API_SECRET=
 ```
 
-Сохрани файл: `Ctrl+O`, затем `Ctrl+X`.
+Save the file: `Ctrl+O`, then `Ctrl+X`.
 
 ---
 
-## 7. Запуск
+## 7. Running
 
 ```bash
 source venv/bin/activate
 python main.py
 ```
 
-Если всё настроено правильно — бот пришлёт приветственное сообщение в Telegram.
+If everything is configured correctly, the bot will send a welcome message in Telegram.
 
 ---
 
-## 8. Автозапуск при перезагрузке сервера
+## 8. Auto-start on reboot
 
-Создай файл сервиса:
+Create a service file:
 ```bash
 sudo nano /etc/systemd/system/funding-arb-bot.service
 ```
 
-Вставь содержимое (замени `ВАШ_ПОЛЬЗОВАТЕЛЬ` на свой логин — обычно это `root`):
+Paste the content (replace `YOUR_USER` with your login — usually `root`):
 
 ```ini
 [Unit]
@@ -260,9 +265,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=ВАШ_ПОЛЬЗОВАТЕЛЬ
-WorkingDirectory=/home/ВАШ_ПОЛЬЗОВАТЕЛЬ/funding-arb-bot
-ExecStart=/home/ВАШ_ПОЛЬЗОВАТЕЛЬ/funding-arb-bot/venv/bin/python main.py
+User=YOUR_USER
+WorkingDirectory=/home/YOUR_USER/funding-arb-bot
+ExecStart=/home/YOUR_USER/funding-arb-bot/venv/bin/python main.py
 Restart=always
 RestartSec=10
 
@@ -270,83 +275,86 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
-Сохрани (`Ctrl+O`, `Ctrl+X`) и активируй:
+Save (`Ctrl+O`, `Ctrl+X`) and enable:
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable funding-arb-bot
 sudo systemctl start funding-arb-bot
 ```
 
-Проверить что бот запущен:
+Check that the bot is running:
 ```bash
 sudo systemctl status funding-arb-bot
 ```
 
-Посмотреть логи:
+View logs:
 ```bash
 sudo journalctl -u funding-arb-bot -f
 ```
 
 ---
 
-## 9. Как пользоваться
+## 9. How to use
 
-### Основные кнопки
+### Main buttons
 
-| Кнопка | Что делает |
-|--------|-----------|
-| 📊 Мои позиции | Открытые пары: текущий APR, заработок, время |
-| 🔍 Сканировать сейчас | Ручное сканирование — топ возможностей прямо сейчас |
-| 💰 Балансы | Текущие балансы на всех подключённых биржах |
-| 📋 История | Закрытые пары с результатами |
-| ⚙️ Настройки | Биржи, размер позиции |
-| 💙 Поддержать автора | Кошельки для доната |
+| Button | What it does |
+|--------|-------------|
+| 📊 My Positions | Open pairs: current APR, earnings, duration |
+| 🔍 Scan Now | Manual scan — top opportunities right now |
+| 💰 Balances | Current balances on all connected exchanges |
+| 📋 History | Closed pairs with results |
+| ⚙️ Settings | Exchanges, position size |
+| 💙 Support Author | Donation wallets |
 
-### Как открыть пару
+### How to open a pair
 
-1. Бот автоматически присылает сигнал когда находит выгодную возможность на любой комбинации бирж
-2. Или нажми **🔍 Сканировать сейчас** чтобы не ждать
-3. В сообщении нажми **✅ Открыть пару** — бот откроет обе ноги автоматически
+1. The bot automatically sends a signal when it finds a good opportunity on any exchange combination
+2. Or press **🔍 Scan Now** to check immediately
+3. In the signal message, press **✅ Open Pair** — the bot opens both legs automatically
 
-### Как закрыть пару
+### How to close a pair
 
-1. Нажми **📊 Мои позиции**
-2. Найди нужную пару и нажми **❌ Закрыть пару**
+1. Press **📊 My Positions**
+2. Find the pair and press **❌ Close Pair**
 
-### Как добавить к позиции
+### How to add to a position
 
-Если хочешь увеличить размер уже открытой пары:
+To increase the size of an already open pair:
 
-1. Нажми **📊 Мои позиции**
-2. Найди нужную пару и нажми **➕ Добавить**
-3. Введи сумму в USD — бот докупит обе ноги пропорционально
+1. Press **📊 My Positions**
+2. Find the pair and press **➕ Add**
+3. Enter the amount in USD — the bot will add to both legs proportionally
 
-### Настройки
+### Settings
 
-В **⚙️ Настройки** можно:
-- Включать и выключать отдельные биржи
-- Выбрать режим размера позиций: **общий** (одна сумма для всех) или **по биржам** (своя сумма для каждой пары)
+In **⚙️ Settings** you can:
+- Enable and disable individual exchanges
+- Choose position size mode: **global** (same size for all) or **per-exchange** (separate size for each)
 
-### Автоматическая защита
+### Automatic protection
 
-Бот закрывает пару автоматически если:
-- Нетто APR опустился ниже **−50%**
-- APR стал отрицательным и **не восстановился за 4 часа**
-- Цена ушла против любой ноги более чем на **15%** от входа (предупреждение приходит на 10%)
-- До ликвидации любой ноги осталось менее **15%** (предупреждение приходит на 20%)
-
----
-
-## Рекомендации
-
-**Начинай с малого.** Первые позиции открывай на минимальные суммы — $10–15 на ногу. Убедись что бот корректно открывает и закрывает позиции, мониторинг работает, уведомления приходят. Только после этого увеличивай суммы.
-
-**Меньше позиций — лучше.** Каждое открытие и закрытие пары стоит денег: комиссии биржи плюс спред. Лучше держать 1–2 пары на крупные суммы, чем распылять капитал на 5–10 мелких позиций.
-
-**Используй отдельные кошельки.** Для Hyperliquid и GRVT бот использует приватный ключ EVM-кошелька. Создай отдельный кошелёк специально для бота — не используй основной.
+The bot closes a pair automatically if:
+- Net APR drops below **−50%**
+- APR goes negative and **doesn't recover within 4 hours**
+- Price moves against any leg by more than **15%** from entry (warning at 10%)
+- Any leg is less than **15%** from liquidation (warning at 20%)
 
 ---
 
-## Вопросы и обновления
+## Tips
 
-Канал автора — обновления бота, стратегии, разборы: [@hubcryptocis](https://t.me/hubcryptocis)
+**Start small.** Open your first positions with minimum amounts — $10–15 per leg. Make sure the bot correctly opens and closes positions, monitoring works, and notifications arrive. Only then increase position sizes.
+
+**Fewer positions is better.** Every open/close costs money: exchange fees plus spread. Better to hold 1–2 pairs with larger sizes than spread capital across 5–10 small positions.
+
+**Use dedicated wallets.** For Hyperliquid and GRVT the bot uses an EVM wallet private key. Create a separate wallet just for the bot — don't use your main one.
+
+---
+
+## Updates and questions
+
+Author's channel — bot updates, strategies, insights: [@hubcryptocis](https://t.me/hubcryptocis)
+
+Support (EVM): `0xA3aCe3905fb080930f7Eeac9Fe401F5B41b16629`
+Support (SOL): `5UztCBoUq2HvtH5nibLmWgxuR5fU5AeagkX9mqdXa5Pq`

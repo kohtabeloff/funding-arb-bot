@@ -223,6 +223,14 @@ class GRVTExecutor(BaseExchangeExecutor):
         try:
             api = await self._get_api()
             balance = await api.fetch_balance()
+            # SDK может не авторизоваться с первой попытки — retry
+            if not balance:
+                import asyncio
+                await asyncio.sleep(2)
+                self._api = None
+                self._markets_loaded = False
+                api = await self._get_api()
+                balance = await api.fetch_balance()
             # Ищем USDT баланс
             if isinstance(balance, dict):
                 usdt = balance.get("USDT", {})

@@ -16,8 +16,10 @@ from config import (
     SCAN_INTERVAL_SECONDS, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, POSITION_SIZE_USD,
     AUTHOR_CHANNEL, AUTHOR_CHANNEL_NAME, DONATION_WALLET_EVM, DONATION_WALLET_SOL,
     EXCHANGES, LIQ_WARN_PCT, LIQ_AUTO_CLOSE_PCT, PRICE_WARN_PCT, PRICE_AUTO_CLOSE_PCT,
-    NEG_APR_HARD_CLOSE, NEG_APR_WAIT_HOURS,
+    NEG_APR_HARD_CLOSE, NEG_APR_WAIT_HOURS, BOT_LANG,
 )
+from messages import RU, EN
+MSG = EN if BOT_LANG == "en" else RU
 from scanners.hyperliquid import HyperliquidScanner
 from scanners.backpack import BackpackScanner
 from scanners.lighter import LighterScanner
@@ -76,12 +78,12 @@ _waiting_for_size: str | None = None  # None или "global" / exchange_name
 _waiting_for_scale_in: tuple | None = None
 
 # ─── Кнопки ──────────────────────────────────────────────────────────────────
-BTN_POSITIONS = "📊 Мои позиции"
-BTN_SCAN = "🔍 Сканировать сейчас"
-BTN_HISTORY = "📋 История"
-BTN_SETTINGS = "⚙️ Настройки"
-BTN_BALANCES = "💰 Балансы"
-BTN_SUPPORT = "💙 Поддержать автора"
+BTN_POSITIONS = MSG["btn_positions"]
+BTN_SCAN = MSG["btn_scan"]
+BTN_HISTORY = MSG["btn_history"]
+BTN_SETTINGS = MSG["btn_settings"]
+BTN_BALANCES = MSG["btn_balances"]
+BTN_SUPPORT = MSG["btn_support"]
 
 # ─── Сканеры ─────────────────────────────────────────────────────────────────
 ALL_SCANNERS = [
@@ -213,10 +215,10 @@ async def _verify_positions(exchange_rates: dict):
             expected_long = (leg["direction"] == "LONG")
 
             if real_qty == 0:
-                alerts.append(f"<b>{symbol}</b> {exch}: позиция исчезла (в БД: {leg['direction']})")
+                alerts.append(MSG["mismatch_disappeared"].format(symbol=symbol, exchange=exch, direction=leg["direction"]))
             elif (real_qty > 0) != expected_long:
                 real_dir = "LONG" if real_qty > 0 else "SHORT"
-                alerts.append(f"<b>{symbol}</b> {exch}: направление не совпадает (БД: {leg['direction']}, биржа: {real_dir})")
+                alerts.append(MSG["mismatch_direction"].format(symbol=symbol, exchange=exch, db_dir=leg["direction"], real_dir=real_dir))
 
     if not alerts:
         return
@@ -228,9 +230,7 @@ async def _verify_positions(exchange_rates: dict):
 
     _verify_alerts_sent[alert_key] = time.time()
     await send_message(
-        "🚨 <b>РАСХОЖДЕНИЕ ПОЗИЦИЙ!</b>\n\n" +
-        "\n".join(f"⚠️ {a}" for a in alerts) +
-        "\n\n<i>Проверь позиции на биржах и в боте (📊 Мои позиции).</i>"
+        MSG["position_mismatch"].format(alerts="\n".join(f"⚠️ {a}" for a in alerts))
     )
 
 
@@ -272,7 +272,7 @@ async def _monitor_open_pairs(exchange_rates: dict):
             apr_details = " | ".join(_leg_apr_str(l) for l in legs)
             await _auto_close_pair(
                 pair_id, symbol, legs,
-                reason=f"нетто APR упал до <code>{net_apr:.1f}%</code> (порог {NEG_APR_HARD_CLOSE}%)\n{apr_details}",
+                reason=MSG["auto_close_reason_neg_apr"].format(apr=net_apr, threshold=NEG_APR_HARD_CLOSE, details=apr_details),
             )
             continue
 
@@ -287,10 +287,10 @@ async def _monitor_open_pairs(exchange_rates: dict):
                     ]])
                     apr_details = " | ".join(_leg_apr_str(l) for l in legs)
                     await send_message(
-                        f"⚠️ <b>Фандинг ушёл в минус — {symbol}</b>\n\n"
-                        f"{apr_details}\n"
-                        f"Нетто: <code>{net_apr:+.1f}%</code> APR\n\n"
-                        f"Жду <code>{int(NEG_APR_WAIT_HOURS)}ч</code> — если не восстановится, закрою автоматически.",
+                        MSG["negative_funding_alert"].format(
+                            symbol=symbol, apr_details=apr_details,
+                            net_apr=net_apr, wait_hours=int(NEG_APR_WAIT_HOURS),
+                        ),
                         reply_markup=keyboard,
                     )
             else:
@@ -300,7 +300,7 @@ async def _monitor_open_pairs(exchange_rates: dict):
                     _negative_funding_since.pop(pair_id, None)
                     await _auto_close_pair(
                         pair_id, symbol, legs,
-                        reason=f"нетто APR <code>{net_apr:+.1f}%</code> не восстановился за <code>{hours_waited:.0f}ч</code>",
+                        reason=MSG["auto_close_reason_neg_wait"].format(apr=net_apr, hours=hours_waited),
                     )
                     continue
         else:
@@ -323,8 +323,10 @@ async def _monitor_open_pairs(exchange_rates: dict):
                     if distance_pct < LIQ_AUTO_CLOSE_PCT:
                         await _auto_close_pair(
                             pair_id, symbol, legs,
-                            reason=f"до ликвидации {exch_name} осталось <code>{distance_pct:.1f}%</code> (порог {LIQ_AUTO_CLOSE_PCT}%)\n"
-                                   f"Цена: <code>${mark_price:.4f}</code> → Ликвидация: <code>${liq_price:.4f}</code> (плечо {leverage}x)",
+                            reason=MSG["auto_close_reason_liq"].format(
+                                exchange=exch_name, distance=distance_pct, threshold=LIQ_AUTO_CLOSE_PCT,
+                                mark=mark_price, liq=liq_price, leverage=leverage,
+                            ),
                         )
                         break
 
@@ -336,10 +338,11 @@ async def _monitor_open_pairs(exchange_rates: dict):
                                 InlineKeyboardButton("❌ Закрыть пару", callback_data=f"close_pair:{pair_id}:{symbol}"),
                             ]])
                             await send_message(
-                                f"⚠️ <b>РИСК ЛИКВИДАЦИИ — {symbol}</b>\n\n"
-                                f"{exch_name} ({leg['direction']}): до ликвидации <code>{distance_pct:.1f}%</code>\n"
-                                f"  Цена: <code>${mark_price:.4f}</code> → Ликвидация: <code>${liq_price:.4f}</code> (плечо {leverage}x)\n\n"
-                                f"⚠️ Закрою автоматически при <code>{LIQ_AUTO_CLOSE_PCT}%</code>",
+                                MSG["liq_risk_alert"].format(
+                                    symbol=symbol, exchange=exch_name, direction=leg["direction"],
+                                    distance=distance_pct, mark=mark_price, liq=liq_price,
+                                    leverage=leverage, threshold=LIQ_AUTO_CLOSE_PCT,
+                                ),
                                 reply_markup=keyboard,
                             )
 
@@ -354,13 +357,15 @@ async def _monitor_open_pairs(exchange_rates: dict):
                         else:
                             loss_pct = (cur_price - entry) / entry * 100
 
-                        direction_str = "упала" if leg["direction"] == "LONG" else "выросла"
+                        direction_str = MSG["price_went_down"] if leg["direction"] == "LONG" else MSG["price_went_up"]
 
                         if loss_pct >= PRICE_AUTO_CLOSE_PCT:
                             await _auto_close_pair(
                                 pair_id, symbol, legs,
-                                reason=f"{exch_name} ({leg['direction']}): цена {direction_str} на <code>{loss_pct:.1f}%</code> от входа\n"
-                                       f"Вход: <code>${entry:.4f}</code> → Сейчас: <code>${cur_price:.4f}</code>",
+                                reason=MSG["auto_close_reason_price"].format(
+                                    exchange=exch_name, direction=leg["direction"], direction_str=direction_str,
+                                    loss=loss_pct, entry=entry, current=cur_price,
+                                ),
                             )
                             break
 
@@ -372,10 +377,11 @@ async def _monitor_open_pairs(exchange_rates: dict):
                                     InlineKeyboardButton("❌ Закрыть пару", callback_data=f"close_pair:{pair_id}:{symbol}"),
                                 ]])
                                 await send_message(
-                                    f"⚠️ <b>РИСК — {symbol}</b>\n\n"
-                                    f"{exch_name} ({leg['direction']}): цена {direction_str} на <code>{loss_pct:.1f}%</code>\n"
-                                    f"  Вход: <code>${entry:.4f}</code> → Сейчас: <code>${cur_price:.4f}</code>\n\n"
-                                    f"⚠️ Закрою при <code>{PRICE_AUTO_CLOSE_PCT}%</code>",
+                                    MSG["price_risk_alert"].format(
+                                        symbol=symbol, exchange=exch_name, direction=leg["direction"],
+                                        direction_str=direction_str, loss=loss_pct,
+                                        entry=entry, current=cur_price, threshold=PRICE_AUTO_CLOSE_PCT,
+                                    ),
                                     reply_markup=keyboard,
                                 )
 
@@ -393,17 +399,12 @@ async def _auto_close_pair(pair_id: str, symbol: str, legs: list, reason: str):
             await close_pair(pair_id=pair_id, symbol=symbol, legs=legs)
         exch_names = " × ".join(l["exchange"] for l in legs)
         await send_message(
-            f"🤖 <b>АВТОЗАКРЫТИЕ — {symbol}</b> ({exch_names})\n\n"
-            f"Причина: {reason}\n\n"
-            f"✅ Пара закрыта автоматически."
+            MSG["auto_close_ok"].format(symbol=symbol, exchanges=exch_names, reason=reason)
         )
     except Exception as e:
         logger.error(f"Автозакрытие {pair_id} ({symbol}) провалилось: {e}")
         await send_message(
-            f"🚨 <b>АВТОЗАКРЫТИЕ ПРОВАЛИЛОСЬ — {symbol}!</b>\n\n"
-            f"Причина: {reason}\n\n"
-            f"❌ Ошибка: <code>{e}</code>\n\n"
-            f"⚠️ <b>Закрой пару вручную немедленно!</b>"
+            MSG["auto_close_fail"].format(symbol=symbol, reason=reason, error=e)
         )
 
 
@@ -461,16 +462,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("✅ Подписался!", callback_data="welcome_subscribed"),
         ]])
         await update.message.reply_text(
-            f"👋 Привет! Это бот для дельта-нейтрального арбитража фандинга.\n\n"
-            f"Бот бесплатный — я делюсь им с сообществом. "
-            f"Если хочешь поддержать и следить за обновлениями, "
-            f"подпишись на канал 👉 {AUTHOR_CHANNEL_NAME}\n\n"
-            f"{AUTHOR_CHANNEL}",
+            MSG["welcome_new"].format(channel_name=AUTHOR_CHANNEL_NAME, channel=AUTHOR_CHANNEL),
             reply_markup=keyboard,
         )
     else:
         await update.message.reply_text(
-            "👋 Привет! Кнопки управления внизу 👇",
+            MSG["welcome_back"],
             reply_markup=persistent_keyboard(),
         )
 
@@ -480,7 +477,7 @@ async def show_positions(update: Update):
     position_groups = await get_open_pairs()
 
     if not position_groups:
-        await update.message.reply_text("📭 Открытых позиций нет")
+        await update.message.reply_text(MSG["no_positions"])
         return
 
     # Собираем текущие ставки
@@ -506,7 +503,7 @@ async def show_positions(update: Update):
             total_earned = 0
             has_earnings = False
             for leg in legs:
-                dir_label = "шорт ↓" if leg["direction"] == "SHORT" else "лонг ↑"
+                dir_label = MSG["short_arrow"] if leg["direction"] == "SHORT" else MSG["long_arrow"]
                 rate = rates_map.get(f"{leg['exchange']}:{symbol}")
                 # Показываем сырой APR с биржи: знак уже несёт смысл
                 # + означает лонги платят шортам, - означает шорты платят лонгам
@@ -521,25 +518,25 @@ async def show_positions(update: Update):
                     total_earned += earned
                     has_earnings = True
 
-            earned_str = f"<code>${total_earned:.4f}</code> (~оценка)" if has_earnings else "<i>нет данных</i>"
+            earned_str = f"<code>${total_earned:.4f}</code> ({MSG['earned_estimate']})" if has_earnings else f"<i>{MSG['no_data']}</i>"
 
             exch_names = " × ".join(l["exchange"] for l in legs)
             text = (
                 f"🔀 <b>{symbol}</b> — {exch_names} {apr_status}\n\n"
                 + "\n".join(lines) + "\n"
-                f"💵 Размер: <code>${total_usd:.0f}</code> (по <code>${legs[0]['position_size_usd']:.0f}</code> на ногу)\n"
-                f"⏱ Открыта: <code>{opened_ago:.1f}ч назад</code>\n"
-                f"  └ Нетто APR: <code>{net_apr:+.1f}%</code>\n"
-                f"💰 Заработано: {earned_str}"
+                f"{MSG['size_label']}: <code>${total_usd:.0f}</code> (по <code>${legs[0]['position_size_usd']:.0f}</code> {MSG['per_leg']})\n"
+                f"{MSG['opened_label']}: <code>{opened_ago:.1f}{MSG['h_ago']}</code>\n"
+                f"  {MSG['net_apr_label']}: <code>{net_apr:+.1f}%</code>\n"
+                f"{MSG['earned_label']}: {earned_str}"
             )
             keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("➕ Добавить", callback_data=f"scale_in:{pair_id}:{symbol}"),
-                InlineKeyboardButton("❌ Закрыть пару", callback_data=f"close_pair:{pair_id}:{symbol}"),
+                InlineKeyboardButton(MSG["btn_add"], callback_data=f"scale_in:{pair_id}:{symbol}"),
+                InlineKeyboardButton(MSG["btn_close_pair"], callback_data=f"close_pair:{pair_id}:{symbol}"),
             ]])
         else:
             # Одиночная позиция
             pos = legs[0]
-            label = "шорт" if pos.get("direction") == "SHORT" else "лонг"
+            label = MSG["short"] if pos.get("direction") == "SHORT" else MSG["long"]
             rate = rates_map.get(f"{pos['exchange']}:{pos['symbol']}")
             current_apr = abs(rate.apr) if rate else 0
             avg_rate = await get_avg_rate_since(pos["exchange"], pos["symbol"], pos["opened_at"])
@@ -549,15 +546,15 @@ async def show_positions(update: Update):
 
             text = (
                 f"📌 <b>{pos['symbol']}</b> — {pos['exchange']} {status}\n\n"
-                f"📋 Тип: <code>{label}</code>\n"
-                f"💵 Размер: <code>${pos['position_size_usd']}</code>\n"
-                f"📈 Цена входа: <code>${pos['entry_price']:.4f}</code>\n"
-                f"⏱ Открыта: <code>{opened_ago:.1f}ч назад</code>\n"
-                f"📊 APR: <code>{current_apr:.1f}%</code>\n"
-                f"💰 Заработано (~): <code>${earned:.4f}</code>"
+                f"{MSG['type_label']}: <code>{label}</code>\n"
+                f"{MSG['size_label']}: <code>${pos['position_size_usd']}</code>\n"
+                f"{MSG['entry_price_label']}: <code>${pos['entry_price']:.4f}</code>\n"
+                f"{MSG['opened_label']}: <code>{opened_ago:.1f}{MSG['h_ago']}</code>\n"
+                f"{MSG['apr_label']}: <code>{current_apr:.1f}%</code>\n"
+                f"{MSG['earned_label']} (~): <code>${earned:.4f}</code>"
             )
             keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("❌ Закрыть", callback_data=f"close:{pos['id']}:{pos['symbol']}")
+                InlineKeyboardButton(MSG["btn_close"], callback_data=f"close:{pos['id']}:{pos['symbol']}")
             ]])
 
         await update.message.reply_text(
@@ -580,7 +577,7 @@ def _build_settings() -> tuple:
     rows = []
 
     # Переключатель бирж
-    rows.append([InlineKeyboardButton("── Биржи ──", callback_data="noop")])
+    rows.append([InlineKeyboardButton(MSG["settings_exchanges_header"], callback_data="noop")])
     exchange_btns = []
     for exch_id, exch_name in EXCHANGES.items():
         is_on = exch_name in _enabled_exchanges
@@ -595,15 +592,15 @@ def _build_settings() -> tuple:
         rows.append(exchange_btns)
 
     # Режим размера позиций
-    rows.append([InlineKeyboardButton("── Размер позиций ──", callback_data="noop")])
+    rows.append([InlineKeyboardButton(MSG["settings_size_header"], callback_data="noop")])
     is_global = _position_size_mode == "global"
     rows.append([
         InlineKeyboardButton(
-            f"{'🔘' if is_global else '⚪'} Общий (${_global_position_size:.0f})",
+            f"{'🔘' if is_global else '⚪'} {MSG['settings_global_btn']} (${_global_position_size:.0f})",
             callback_data="size_mode:global"
         ),
         InlineKeyboardButton(
-            f"{'🔘' if not is_global else '⚪'} Раздельный",
+            f"{'🔘' if not is_global else '⚪'} {MSG['settings_per_exchange_btn']}",
             callback_data="size_mode:per_exchange"
         ),
     ])
@@ -616,7 +613,7 @@ def _build_settings() -> tuple:
             InlineKeyboardButton("$250", callback_data="setsize:global:250"),
             InlineKeyboardButton("$500", callback_data="setsize:global:500"),
         ])
-        rows.append([InlineKeyboardButton("✏️ Ввести вручную", callback_data="setsize:global:manual")])
+        rows.append([InlineKeyboardButton(MSG["settings_enter_manual"], callback_data="setsize:global:manual")])
     else:
         for exch_id, exch_name in EXCHANGES.items():
             if exch_name not in _enabled_exchanges:
@@ -630,18 +627,18 @@ def _build_settings() -> tuple:
                 InlineKeyboardButton("$250", callback_data=f"setsize:{exch_name}:250"),
                 InlineKeyboardButton("$500", callback_data=f"setsize:{exch_name}:500"),
             ])
-            rows.append([InlineKeyboardButton(f"✏️ Ввести ({exch_name})", callback_data=f"setsize:{exch_name}:manual")])
+            rows.append([InlineKeyboardButton(MSG["settings_enter_exchange"].format(exch=exch_name), callback_data=f"setsize:{exch_name}:manual")])
 
     if is_global:
-        desc = f"Режим: <b>общий</b> — <code>${_global_position_size:.0f}</code> на каждую ногу"
+        desc = MSG["settings_mode_global"].format(size=_global_position_size)
     else:
         parts = [f"{n}: <code>${_exchange_sizes.get(n, _global_position_size):.0f}</code>" for n in sorted(_enabled_exchanges)]
-        desc = "Режим: <b>раздельный</b>\n" + "\n".join(parts)
+        desc = MSG["settings_mode_per_exchange"] + "\n" + "\n".join(parts)
 
-    enabled_list = ", ".join(sorted(_enabled_exchanges)) or "ни одна"
+    enabled_list = ", ".join(sorted(_enabled_exchanges)) or MSG["settings_none_enabled"]
     text = (
-        f"⚙️ <b>Настройки</b>\n\n"
-        f"Включены: {enabled_list}\n"
+        f"{MSG['settings_title']}\n\n"
+        f"{MSG['settings_enabled']}: {enabled_list}\n"
         f"{desc}"
     )
     return text, InlineKeyboardMarkup(rows)
@@ -649,8 +646,8 @@ def _build_settings() -> tuple:
 
 async def show_balances(update: Update):
     """Показывает балансы на всех включённых биржах."""
-    msg = await update.message.reply_text("⏳ Загружаю балансы...")
-    lines = ["💰 <b>Балансы</b>\n"]
+    msg = await update.message.reply_text(MSG["loading_balances"])
+    lines = [f"{MSG['balances_title']}\n"]
     total = 0.0
     no_api = []
     for exch_name in sorted(_enabled_exchanges):
@@ -664,10 +661,10 @@ async def show_balances(update: Update):
                 no_api.append(exch_name)
         except Exception as e:
             logger.error(f"Ошибка баланса {exch_name}: {e}")
-            lines.append(f"  {exch_name}: ❌ ошибка")
-    lines.append(f"\n📊 Итого: <code>${total:.2f}</code>")
+            lines.append(f"  {exch_name}: {MSG['balance_error']}")
+    lines.append(f"\n{MSG['balances_total']}: <code>${total:.2f}</code>")
     if no_api:
-        lines.append(f"<i>{', '.join(no_api)} — нет API баланса</i>")
+        lines.append(f"<i>{', '.join(no_api)} — {MSG['no_api_balance']}</i>")
     await msg.edit_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
@@ -683,13 +680,13 @@ HISTORY_PAGE_SIZE = 5
 async def _build_history_page(page: int) -> tuple:
     total_count = await count_closed_pairs()
     if total_count == 0:
-        return "📭 Закрытых позиций пока нет", None
+        return MSG["no_history"], None
 
     total_pages = (total_count + HISTORY_PAGE_SIZE - 1) // HISTORY_PAGE_SIZE
     page = max(0, min(page, total_pages - 1))
     items = await get_closed_pairs(limit=HISTORY_PAGE_SIZE, offset=page * HISTORY_PAGE_SIZE)
 
-    lines = [f"📋 <b>История</b> (стр. {page + 1}/{total_pages})\n"]
+    lines = [f"{MSG['history_title']} ({MSG['history_page'].format(page=page + 1, total=total_pages)})\n"]
     for item in items:
         legs = item["legs"]
         if not legs:
@@ -718,13 +715,13 @@ async def _build_history_page(page: int) -> tuple:
         total_result = total_pnl + total_funding - total_fees
         result_emoji = "🟢" if total_result >= 0 else "🔴"
 
-        funding_str = f" | Фандинг: <code>{total_funding:+.4f}</code>" if has_funding else ""
-        result_str = f" | Итого: <code>{total_result:+.4f}</code>" if has_funding else ""
+        funding_str = f" | {MSG['history_funding']}: <code>{total_funding:+.4f}</code>" if has_funding else ""
+        result_str = f" | {MSG['history_total']}: <code>{total_result:+.4f}</code>" if has_funding else ""
 
         lines.append(
             f"{result_emoji} <b>{symbol}</b> — {exch_names}\n"
             f"  💵 ${total_usd:.0f} | P&L: <code>{total_pnl:+.4f}</code>{funding_str}{result_str}\n"
-            f"  💸 Комиссии: <code>-{total_fees:.4f}</code> | ⏱ {ago_h:.0f}ч назад"
+            f"  {MSG['history_fees']}: <code>-{total_fees:.4f}</code> | ⏱ {ago_h:.0f}{MSG['h_ago']}"
         )
 
     nav_btns = []
@@ -761,16 +758,16 @@ async def _fetch_rates_for_symbol(symbol: str, exch_a: str, exch_b: str):
 
 async def scan_manual(update: Update):
     """Ручное сканирование — отправляет карточки с кнопками."""
-    msg = await update.message.reply_text("🔍 Сканирую...")
+    msg = await update.message.reply_text(MSG["scanning"])
     exchange_rates = await fetch_all_rates()
     if not exchange_rates:
-        await msg.edit_text("❌ Нет данных ни от одной биржи")
+        await msg.edit_text(MSG["no_exchange_data"])
         return
 
     opps = find_pair_opportunities(exchange_rates, _enabled_exchanges)
 
     if not opps:
-        await msg.edit_text("📭 Нет подходящих пар сейчас")
+        await msg.edit_text(MSG["no_pairs"])
         return
 
     await msg.delete()
@@ -781,7 +778,7 @@ async def scan_manual(update: Update):
     # Итоговое сообщение
     min_apr = opps[-1]["net_apr"]
     max_apr = opps[0]["net_apr"]
-    await send_message(f"✅ <b>{len(opps)} пар</b> (APR от {min_apr:.0f}% до {max_apr:.0f}%)")
+    await send_message(MSG["scan_result"].format(count=len(opps), min=min_apr, max=max_apr))
 
 
 # ─── Обработка кнопок ────────────────────────────────────────────────────────
@@ -802,9 +799,9 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Приветствие — подписался ──────────────────────────────────────────────
     if data == "welcome_subscribed":
-        await query.edit_message_text("✅ Спасибо! Добро пожаловать 🤝")
+        await query.edit_message_text(MSG["welcome_subscribed"])
         await query.message.reply_text(
-            "👇 Кнопки управления:",
+            MSG["control_buttons"],
             reply_markup=persistent_keyboard(),
         )
         return
@@ -819,16 +816,14 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         lock_key = f"{exch_a}:{exch_b}:{symbol}"
         if lock_key in _opening_pairs:
-            await query.edit_message_text("⏳ Уже открываю эту пару...")
+            await query.edit_message_text(MSG["already_opening"])
             return
         _opening_pairs.add(lock_key)
 
         # Размер = минимум из двух бирж (если раздельный режим)
         size = min(get_position_size(exch_a), get_position_size(exch_b))
 
-        await query.edit_message_text(
-            f"⏳ Проверяю фандинг и открываю {symbol}..."
-        )
+        await query.edit_message_text(MSG["opening_pair"].format(symbol=symbol))
 
         try:
             # Перепроверяем фандинг перед открытием
@@ -839,8 +834,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 new_net, new_dir_a, new_dir_b = _calc_pair_apr(rate_a_fresh, rate_b_fresh)
                 if new_net < 10:  # APR упал ниже 10%
                     await query.edit_message_text(
-                        f"⚠️ Фандинг изменился! Текущий нетто APR: {new_net:.1f}%\n"
-                        f"Пара не открыта.",
+                        MSG["funding_changed"].format(apr=new_net),
                     )
                     _opening_pairs.discard(lock_key)
                     return
@@ -854,14 +848,16 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             leg_a = result["leg_a"]
             leg_b = result["leg_b"]
             await query.edit_message_text(
-                f"✅ <b>Пара открыта: {symbol}</b>\n\n"
-                f"  {exch_a}: <code>{leg_a['size']:.4f}</code> шт × <code>${leg_a['price']:.4f}</code> ({dir_a})\n"
-                f"  {exch_b}: <code>{leg_b['size']:.4f}</code> шт × <code>${leg_b['price']:.4f}</code> ({dir_b})\n"
-                f"💵 Размер: <code>~${size}</code> на ногу",
+                MSG["pair_opened"].format(
+                    symbol=symbol,
+                    exch_a=exch_a, size_a=leg_a['size'], price_a=leg_a['price'], dir_a=dir_a,
+                    exch_b=exch_b, size_b=leg_b['size'], price_b=leg_b['price'], dir_b=dir_b,
+                    size=size,
+                ),
                 parse_mode=ParseMode.HTML,
             )
         except Exception as e:
-            await query.edit_message_text(f"❌ Ошибка открытия пары:\n<code>{e}</code>", parse_mode=ParseMode.HTML)
+            await query.edit_message_text(MSG["open_error"].format(error=e), parse_mode=ParseMode.HTML)
         finally:
             _opening_pairs.discard(lock_key)
 
@@ -871,14 +867,14 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pair_id = parts[1]
         symbol = parts[2] if len(parts) > 2 else "?"
 
-        await query.edit_message_text(f"⏳ Закрываю пару {symbol}...")
+        await query.edit_message_text(MSG["closing_pair"].format(symbol=symbol))
         try:
             async with _trade_lock:
                 legs = await get_positions_by_pair(pair_id)
                 await close_pair(pair_id, symbol, legs)
-            await query.edit_message_text(f"✅ Пара {symbol} закрыта.", parse_mode=ParseMode.HTML)
+            await query.edit_message_text(MSG["pair_closed"].format(symbol=symbol), parse_mode=ParseMode.HTML)
         except Exception as e:
-            await query.edit_message_text(f"❌ Ошибка закрытия:\n<code>{e}</code>", parse_mode=ParseMode.HTML)
+            await query.edit_message_text(MSG["close_error"].format(error=e), parse_mode=ParseMode.HTML)
 
     # ── Закрытие одиночной позиции ────────────────────────────────────────
     elif data.startswith("close:"):
@@ -886,22 +882,22 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pos_id = parts[1]
         symbol = parts[2] if len(parts) > 2 else "?"
 
-        await query.edit_message_text(f"⏳ Закрываю позицию {symbol}...")
+        await query.edit_message_text(MSG["closing_position"].format(symbol=symbol))
         try:
             async with _trade_lock:
                 pos = await get_position_by_id(pos_id)
                 if not pos:
-                    await query.edit_message_text(f"❌ Позиция не найдена (id={pos_id})")
+                    await query.edit_message_text(MSG["position_not_found"].format(id=pos_id))
                     return
                 executor = get_executor(pos["exchange"])
                 await executor.market_close(pos["symbol"], pos["size"], pos["direction"] == "LONG")
                 await mark_position_closed(pos_id)
             await query.edit_message_text(
-                f"✅ Позиция {symbol} на {pos['exchange']} закрыта.",
+                MSG["position_closed"].format(symbol=symbol, exchange=pos['exchange']),
                 parse_mode=ParseMode.HTML,
             )
         except Exception as e:
-            await query.edit_message_text(f"❌ Ошибка закрытия:\n<code>{e}</code>", parse_mode=ParseMode.HTML)
+            await query.edit_message_text(MSG["close_error"].format(error=e), parse_mode=ParseMode.HTML)
 
     # ── Scale in ─────────────────────────────────────────────────────────────
     elif data.startswith("scale_in:"):
@@ -909,9 +905,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pair_id = parts[1]
         symbol = parts[2] if len(parts) > 2 else "?"
         _waiting_for_scale_in = (pair_id, symbol)
-        await query.edit_message_text(
-            f"✏️ Введи сумму для добавления к паре {symbol} (в USD):"
-        )
+        await query.edit_message_text(MSG["scale_in_prompt"].format(symbol=symbol))
 
     # ── Переключение бирж ────────────────────────────────────────────────────
     elif data.startswith("toggle_exchange:"):
@@ -939,8 +933,9 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if value == "manual":
             _waiting_for_size = target
             await query.message.delete()
+            target_label = MSG["all_exchanges"] if target == "global" else target
             await query.message.chat.send_message(
-                f"✏️ Введи размер позиции в USD для {'всех бирж' if target == 'global' else target}:"
+                MSG["enter_size_prompt"].format(target=target_label)
             )
         else:
             size = float(value)
@@ -977,8 +972,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_settings(update)
     elif text == BTN_SUPPORT:
         await update.message.reply_text(
-            f"💙 <b>Поддержать автора</b>\n\n"
-            f'Канал: <a href="{AUTHOR_CHANNEL}">{AUTHOR_CHANNEL_NAME}</a>\n\n'
+            f"{MSG['support_title']}\n\n"
+            f'{MSG["support_channel"]}: <a href="{AUTHOR_CHANNEL}">{AUTHOR_CHANNEL_NAME}</a>\n\n'
             f"EVM: <code>{DONATION_WALLET_EVM}</code>\n"
             f"SOL: <code>{DONATION_WALLET_SOL}</code>",
             parse_mode=ParseMode.HTML,
@@ -990,7 +985,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             size = float(text.replace("$", "").replace(",", "."))
             if size < 5:
-                await update.message.reply_text("❌ Минимум $5")
+                await update.message.reply_text(MSG["min_size_error"])
                 return
             if target == "global":
                 global _global_position_size
@@ -998,12 +993,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 _exchange_sizes[target] = size
             await _save_settings()
+            target_label = MSG["size_set_ok_global"] if target == "global" else target
             await update.message.reply_text(
-                f"✅ Размер {'общий' if target == 'global' else target}: <code>${size:.0f}</code>",
+                MSG["size_set_ok"].format(target=target_label, size=size),
                 parse_mode=ParseMode.HTML,
             )
         except ValueError:
-            await update.message.reply_text("❌ Введи число, например: <code>100</code>", parse_mode=ParseMode.HTML)
+            await update.message.reply_text(MSG["enter_number_error"], parse_mode=ParseMode.HTML)
     # Ввод суммы для scale_in
     elif _waiting_for_scale_in is not None:
         pair_id, symbol = _waiting_for_scale_in
@@ -1011,18 +1007,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             add_usd = float(text.replace("$", "").replace(",", "."))
             if add_usd < 5:
-                await update.message.reply_text("❌ Минимум $5")
+                await update.message.reply_text(MSG["min_size_error"])
                 return
-            await update.message.reply_text(f"⏳ Добавляю ${add_usd} к паре {symbol}...")
+            await update.message.reply_text(MSG["scale_in_adding"].format(amount=add_usd, symbol=symbol))
             async with _trade_lock:
                 legs = await get_positions_by_pair(pair_id)
                 result = await scale_in_pair(pair_id, symbol, legs, add_usd)
             await update.message.reply_text(
-                f"✅ Добавлено <code>${add_usd}</code> к паре {symbol}",
+                MSG["scale_in_done"].format(amount=add_usd, symbol=symbol),
                 parse_mode=ParseMode.HTML,
             )
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка scale in:\n<code>{e}</code>", parse_mode=ParseMode.HTML)
+            await update.message.reply_text(MSG["scale_in_error"].format(error=e), parse_mode=ParseMode.HTML)
 
 
 # ─── Запуск ──────────────────────────────────────────────────────────────────

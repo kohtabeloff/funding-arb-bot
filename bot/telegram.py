@@ -2,7 +2,9 @@ import html
 import logging
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
-from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
+from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, BOT_LANG
+from messages import RU, EN
+MSG = EN if BOT_LANG == "en" else RU
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +38,8 @@ async def send_pair_signal(opp: dict, size_usd: float = 0) -> None:
     dir_a = opp["dir_a"]
     dir_b = opp["dir_b"]
 
-    dir_a_str = "лонг ↑" if dir_a == "LONG" else "шорт ↓"
-    dir_b_str = "лонг ↑" if dir_b == "LONG" else "шорт ↓"
+    dir_a_str = MSG["long_arrow"] if dir_a == "LONG" else MSG["short_arrow"]
+    dir_b_str = MSG["long_arrow"] if dir_b == "LONG" else MSG["short_arrow"]
 
     # Сырой APR с биржи (как показывает биржа)
     eff_a = opp['apr_a']
@@ -51,16 +53,16 @@ async def send_pair_signal(opp: dict, size_usd: float = 0) -> None:
         f"🔀 <b>{esc(symbol)}</b> — {esc(exch_a)} × {esc(exch_b)}\n\n"
         f"{esc(exch_a)} ({dir_a_str}): <code>{eff_a:+.1f}%</code>\n"
         f"{esc(exch_b)} ({dir_b_str}): <code>{eff_b:+.1f}%</code>\n"
-        f"📈 Нетто: ~{net_apr:.1f}% APR\n\n"
-        f"💸 {esc(exch_a)}: {fee_a} комиссия | {esc(exch_b)}: {fee_b}"
+        f"{MSG['signal_net_apr']}: ~{net_apr:.1f}% APR\n\n"
+        f"💸 {esc(exch_a)}: {fee_a} {MSG['signal_fee']} | {esc(exch_b)}: {fee_b}"
     )
 
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton(
-            "✅ Открыть пару",
+            MSG["btn_open_pair"],
             callback_data=f"open_pair:{exch_a}:{exch_b}:{symbol}:{dir_a}:{dir_b}:{net_apr:.1f}"
         ),
-        InlineKeyboardButton("❌ Пропустить", callback_data="skip"),
+        InlineKeyboardButton(MSG["btn_skip"], callback_data="skip"),
     ]])
 
     await bot.send_message(
