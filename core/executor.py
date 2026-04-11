@@ -11,25 +11,31 @@ from db.database import save_pair, close_pair as db_close_pair, scale_pair_db_ge
 
 logger = logging.getLogger(__name__)
 
+# Кеш executor'ов — чтобы не пересоздавать SDK и не делать load_markets() при каждом ордере
+_executor_cache: dict[str, BaseExchangeExecutor] = {}
+
 
 def get_executor(exchange_name: str) -> BaseExchangeExecutor:
     """
-    Фабрика: создаёт executor для биржи по имени.
-    Конфиг берёт из config.py.
+    Фабрика: возвращает (или создаёт) executor для биржи по имени.
+    Кешируется — SDK и маркеты загружаются только один раз за сессию.
     """
+    if exchange_name in _executor_cache:
+        return _executor_cache[exchange_name]
+
     import config as cfg
 
     if exchange_name == "Backpack":
         from core.exchanges.backpack import BackpackExecutor
         if not cfg.BACKPACK_API_KEY or not cfg.BACKPACK_API_SECRET:
             raise RuntimeError("Backpack API ключи не заданы в .env")
-        return BackpackExecutor(cfg.BACKPACK_API_KEY, cfg.BACKPACK_API_SECRET)
+        executor = BackpackExecutor(cfg.BACKPACK_API_KEY, cfg.BACKPACK_API_SECRET)
 
     elif exchange_name == "Lighter":
         from core.exchanges.lighter import LighterExecutor
         if not cfg.LIGHTER_API_PRIVATE_KEY:
             raise RuntimeError("Lighter API ключ не задан в .env")
-        return LighterExecutor(
+        executor = LighterExecutor(
             cfg.LIGHTER_API_PRIVATE_KEY,
             cfg.LIGHTER_API_KEY_INDEX,
             cfg.LIGHTER_ACCOUNT_INDEX,
@@ -39,22 +45,25 @@ def get_executor(exchange_name: str) -> BaseExchangeExecutor:
         from core.exchanges.hyperliquid import HyperliquidExecutor
         if not cfg.HYPERLIQUID_PRIVATE_KEY:
             raise RuntimeError("Hyperliquid приватный ключ не задан в .env")
-        return HyperliquidExecutor(cfg.HYPERLIQUID_PRIVATE_KEY, cfg.WALLET_ADDRESS)
+        executor = HyperliquidExecutor(cfg.HYPERLIQUID_PRIVATE_KEY, cfg.WALLET_ADDRESS)
 
     elif exchange_name == "GRVT":
         from core.exchanges.grvt import GRVTExecutor
         if not cfg.GRVT_API_KEY:
             raise RuntimeError("GRVT API ключ не задан в .env")
-        return GRVTExecutor(cfg.GRVT_API_KEY, cfg.GRVT_PRIVATE_KEY, cfg.GRVT_TRADING_ACCOUNT_ID)
+        executor = GRVTExecutor(cfg.GRVT_API_KEY, cfg.GRVT_PRIVATE_KEY, cfg.GRVT_TRADING_ACCOUNT_ID)
 
     elif exchange_name == "Aster":
         from core.exchanges.aster import AsterExecutor
         if not cfg.ASTER_API_KEY:
             raise RuntimeError("Aster API ключ не задан в .env")
-        return AsterExecutor(cfg.ASTER_API_KEY, cfg.ASTER_API_SECRET)
+        executor = AsterExecutor(cfg.ASTER_API_KEY, cfg.ASTER_API_SECRET)
 
     else:
         raise ValueError(f"Неизвестная биржа: {exchange_name}")
+
+    _executor_cache[exchange_name] = executor
+    return executor
 
 
 async def open_pair(
@@ -321,7 +330,9 @@ async def _rollback_leg(
 
 
 async def _close_executor(executor: BaseExchangeExecutor):
-    """Безопасно закрывает executor."""
+    """Безопасно закрывает executor. Кешированные executor'ы не закрываем — они переиспользуются."""
+    if executor in _executor_cache.values():
+        return
     try:
         await executor.close()
     except Exception:
