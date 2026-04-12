@@ -49,13 +49,8 @@ async def send_pair_signal(opp: dict, size_usd: float = 0) -> None:
     fee_b = EXCHANGE_FEES.get(exch_b, "?")
     net_apr = opp['net_apr']
 
-    # Стрик пары — как давно Net APR положительный (минимум из двух ног)
-    streak_a = opp.get("streak_a")
-    streak_b = opp.get("streak_b")
-    if streak_a is not None and streak_b is not None:
-        pair_streak = min(streak_a, streak_b)
-    else:
-        pair_streak = streak_a or streak_b  # если одна нога ещё без истории
+    # Стрик пары — как давно Net APR положительный
+    pair_streak = opp.get("pair_streak")
 
     def _pair_streak_str(hours: float | None) -> str:
         if hours is None:

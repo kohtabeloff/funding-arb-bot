@@ -68,8 +68,8 @@ _protection_enabled: bool = True
 _price_close_pct: float = PRICE_AUTO_CLOSE_PCT   # % падения цены → закрыть
 _neg_apr_hours: float = NEG_APR_WAIT_HOURS        # часов в минусе → закрыть
 
-# История фандинга — сколько часов держится текущее направление APR
-# {exchange:symbol: {"is_positive": bool, "since": float, "dip_since": float|None}}
+# История Net APR пар — сколько часов держится положительный результат
+# {"ExchA:ExchB:SYMBOL": {"positive_since": float|None, "dip_since": float|None}}
 _funding_streak: dict[str, dict] = {}
 FUNDING_DIP_TOLERANCE_HOURS = 4.0  # дипы короче этого игнорируются
 
@@ -166,55 +166,59 @@ async def _save_settings():
     await save_setting("neg_apr_hours", str(_neg_apr_hours))
 
 
-# ─── История фандинга ────────────────────────────────────────────────────────
+# ─── История Net APR пар ─────────────────────────────────────────────────────
+# Отслеживаем сколько часов держится положительный Net APR для каждой пары.
+# Дипы короче FUNDING_DIP_TOLERANCE_HOURS игнорируются.
 
-def _update_funding_streaks(exchange_rates: dict):
-    """Обновляет стрики фандинга после каждого скана.
-    Игнорирует дипы короче FUNDING_DIP_TOLERANCE_HOURS."""
+def _pair_key(exch_a: str, exch_b: str, symbol: str) -> str:
+    a, b = sorted([exch_a, exch_b])
+    return f"{a}:{b}:{symbol}"
+
+
+def _update_pair_net_streaks(opps: list):
+    """Обновляет стрики на основе текущего списка выгодных пар.
+    Пары, которые исчезли из скана — считаются ушедшими в 0 или минус."""
     now = time.time()
-    for exch_name, rates in exchange_rates.items():
-        for rate in rates:
-            key = f"{exch_name}:{rate.symbol}"
-            is_positive = rate.apr > 0
+    current_keys = set()
 
-            if key not in _funding_streak:
-                _funding_streak[key] = {"is_positive": is_positive, "since": now, "dip_since": None}
-                continue
+    for opp in opps:
+        key = _pair_key(opp["exchange_a"], opp["exchange_b"], opp["symbol"])
+        current_keys.add(key)
 
+        if key not in _funding_streak:
+            _funding_streak[key] = {"positive_since": now, "dip_since": None}
+        else:
             streak = _funding_streak[key]
-
-            if is_positive == streak["is_positive"]:
-                # Совпадает с текущим стриком — вернулись из дипа или продолжаем
-                if streak["dip_since"] is not None:
-                    dip_hours = (now - streak["dip_since"]) / 3600
-                    if dip_hours <= FUNDING_DIP_TOLERANCE_HOURS:
-                        streak["dip_since"] = None  # дип был коротким — игнорируем
-                    else:
-                        # Дип затянулся, но вернулись — считаем новый стрик
-                        streak["since"] = now
-                        streak["dip_since"] = None
-            else:
-                # Направление изменилось
-                if streak["dip_since"] is None:
-                    streak["dip_since"] = now  # начало дипа
+            if streak["dip_since"] is not None:
+                # Пара вернулась в плюс после дипа
+                dip_hours = (now - streak["dip_since"]) / 3600
+                if dip_hours <= FUNDING_DIP_TOLERANCE_HOURS:
+                    streak["dip_since"] = None  # дип короткий — игнорируем, стрик продолжается
                 else:
-                    dip_hours = (now - streak["dip_since"]) / 3600
-                    if dip_hours > FUNDING_DIP_TOLERANCE_HOURS:
-                        # Дип слишком долгий — начинаем новый стрик
-                        streak["is_positive"] = is_positive
-                        streak["since"] = streak["dip_since"]  # стрик считается с начала дипа
-                        streak["dip_since"] = None
+                    streak["positive_since"] = now  # дип затянулся — новый стрик
+                    streak["dip_since"] = None
+
+    # Пары, которых нет в текущем скане → net APR упал до 0 или в минус
+    for key, streak in _funding_streak.items():
+        if key in current_keys:
+            continue
+        if streak.get("positive_since") is None:
+            continue
+        if streak["dip_since"] is None:
+            streak["dip_since"] = now  # начало дипа
+        else:
+            dip_hours = (now - streak["dip_since"]) / 3600
+            if dip_hours > FUNDING_DIP_TOLERANCE_HOURS:
+                streak["positive_since"] = None  # стрик сброшен
 
 
-def get_streak_hours(exchange: str, symbol: str, is_positive: bool) -> float | None:
-    """Возвращает кол-во часов стрика для нужного направления, или None если нет/другой."""
-    key = f"{exchange}:{symbol}"
-    if key not in _funding_streak:
+def get_pair_streak_hours(exch_a: str, exch_b: str, symbol: str) -> float | None:
+    """Сколько часов Net APR пары держится положительным. None если данных нет."""
+    key = _pair_key(exch_a, exch_b, symbol)
+    streak = _funding_streak.get(key)
+    if not streak or streak.get("positive_since") is None:
         return None
-    streak = _funding_streak[key]
-    if streak["is_positive"] != is_positive:
-        return None
-    return (time.time() - streak["since"]) / 3600
+    return (time.time() - streak["positive_since"]) / 3600
 
 
 # ─── Сканирование ────────────────────────────────────────────────────────────
@@ -485,17 +489,18 @@ async def _auto_close_pair(pair_id: str, symbol: str, legs: list, reason: str):
 # ─── Поиск новых возможностей ────────────────────────────────────────────────
 
 def _enrich_opp_with_streaks(opp: dict) -> dict:
-    """Добавляет в opp информацию о стриках фандинга для каждой ноги."""
-    dir_a_positive = opp["dir_a"] == "SHORT"  # SHORT зарабатывает на положительном APR
-    dir_b_positive = opp["dir_b"] == "SHORT"
-    opp["streak_a"] = get_streak_hours(opp["exchange_a"], opp["symbol"], dir_a_positive)
-    opp["streak_b"] = get_streak_hours(opp["exchange_b"], opp["symbol"], dir_b_positive)
+    """Добавляет в opp количество часов положительного Net APR для пары."""
+    opp["pair_streak"] = get_pair_streak_hours(opp["exchange_a"], opp["exchange_b"], opp["symbol"])
     return opp
 
 
 async def _scan_opportunities(exchange_rates: dict):
     """Ищет пары и отправляет сигналы."""
     opps = find_pair_opportunities(exchange_rates, _enabled_exchanges)
+
+    # Обновляем стрики для всех найденных пар (и помечаем отсутствующие как дип)
+    _update_pair_net_streaks(opps)
+
     if not opps:
         return
 
@@ -531,7 +536,6 @@ async def _scan_and_notify_inner():
         return
 
     await save_funding_snapshot(exchange_rates)
-    _update_funding_streaks(exchange_rates)
     await _verify_positions(exchange_rates)
     await _monitor_open_pairs(exchange_rates)
     await _scan_opportunities(exchange_rates)
@@ -890,7 +894,7 @@ async def scan_manual(update: Update):
 
     await msg.delete()
 
-    _update_funding_streaks(exchange_rates)
+    _update_pair_net_streaks(opps)
     for opp in opps:
         _enrich_opp_with_streaks(opp)
         await send_pair_signal(opp)
