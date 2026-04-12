@@ -171,10 +171,11 @@ async def get_position_by_id(pos_id) -> dict | None:
 
 
 async def mark_position_closed(pos_id):
-    """Помечает одну позицию как закрытую."""
+    """Помечает одну позицию как закрытую, записывает timestamp."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE positions SET status = 'closed' WHERE id = ?", (pos_id,)
+            "UPDATE positions SET status='closed', closed_at=? WHERE id=?",
+            (time.time(), pos_id)
         )
         await db.commit()
 
@@ -244,8 +245,9 @@ async def count_closed_pairs() -> int:
         async with db.execute("""
             SELECT COUNT(*) FROM (
                 SELECT pair_id FROM positions
-                WHERE status='closed' AND pair_id IS NOT NULL
+                WHERE pair_id IS NOT NULL
                 GROUP BY pair_id
+                HAVING COUNT(*) = SUM(CASE WHEN status='closed' THEN 1 ELSE 0 END)
                 UNION ALL
                 SELECT CAST(id AS TEXT) FROM positions
                 WHERE status='closed' AND pair_id IS NULL
@@ -260,8 +262,10 @@ async def get_closed_pairs(limit: int = 5, offset: int = 0) -> list[dict]:
         db.row_factory = aiosqlite.Row
         async with db.execute("""
             SELECT pair_id, MAX(closed_at) as closed_at, 'pair' as kind
-            FROM positions WHERE status='closed' AND pair_id IS NOT NULL
+            FROM positions
+            WHERE pair_id IS NOT NULL
             GROUP BY pair_id
+            HAVING COUNT(*) = SUM(CASE WHEN status='closed' THEN 1 ELSE 0 END)
             UNION ALL
             SELECT CAST(id AS TEXT), closed_at, 'single' as kind
             FROM positions WHERE status='closed' AND pair_id IS NULL

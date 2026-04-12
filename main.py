@@ -751,7 +751,11 @@ def _build_settings() -> tuple:
 
     prot_desc = ""
     if _protection_enabled:
-        prot_desc = f"\n\n🛡 Защита: закрытие при APR &lt;{_neg_apr_hard_close:.0f}% или минус-фандинге &gt;{_neg_apr_hours:.0f}ч"
+        prot_desc = (
+            f"\n\n🛡 Защита: закрытие при APR &lt;{_neg_apr_hard_close:.0f}% "
+            f"или минус-фандинге &gt;{_neg_apr_hours:.0f}ч\n"
+            f"📌 Также: закрытие при падении цены &gt;{PRICE_AUTO_CLOSE_PCT:.0f}% от входа (фиксировано)"
+        )
     else:
         prot_desc = "\n\n⚠️ Защита выключена — автозакрытие не работает"
 

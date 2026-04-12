@@ -106,11 +106,15 @@ class HyperliquidExecutor(BaseExchangeExecutor):
         price = await self.get_mark_price(symbol)
 
         if size > 0:
-            # Закрываем конкретный размер через обратный ордер
+            # Закрываем через reduce-only ордер — не перевернёт позицию если размер в БД устарел
             sz_decimals = self._get_sz_decimals(symbol)
             close_size = round(size, sz_decimals)
             is_buy = not was_long  # если был лонг → sell, если шорт → buy
-            result = await asyncio.to_thread(exchange.market_open, symbol, is_buy, close_size, None, 0.01)
+            order_type = {"limit": {"tif": "Ioc"}}
+            result = await asyncio.to_thread(
+                exchange.order, symbol, is_buy, close_size, price * 0.95 if is_buy else price * 1.05,
+                order_type, reduce_only=True
+            )
             if result.get("status") != "ok":
                 raise RuntimeError(f"Hyperliquid ошибка закрытия {symbol}: {result}")
             logger.info(f"Hyperliquid: закрыта часть {symbol}, size={close_size}")

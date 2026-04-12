@@ -160,7 +160,7 @@ async def open_pair(
             },
         ])
     except Exception as db_err:
-        # Критично: позиции открыты, но БД не записала. Шлём алерт.
+        # Критично: позиции открыты, но БД не записала.
         logger.critical(f"БД не сохранила пару {pair_id}: {db_err}")
         try:
             from bot.telegram import send_message
@@ -169,10 +169,15 @@ async def open_pair(
                 f"*{symbol}*: {exchange_a_name} {dir_a} + {exchange_b_name} {dir_b}\n"
                 f"Размер: `${size_usd}`\n"
                 f"Ошибка БД: `{db_err}`\n\n"
-                f"⚠️ Запиши или закрой вручную!"
+                f"⚠️ Закрой вручную на обеих биржах!"
             )
         except Exception:
             pass
+        # Поднимаем ошибку — позиции есть, но бот их не видит. Пользователь должен знать.
+        raise RuntimeError(
+            f"Пара открыта на биржах, но НЕ записана в БД: {db_err}\n"
+            f"Закрой {symbol} вручную на {exchange_a_name} и {exchange_b_name}!"
+        )
 
     await _close_executor(exec_a)
     await _close_executor(exec_b)
