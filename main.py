@@ -63,6 +63,11 @@ _position_size_mode: str = "global"  # "global" | "per_exchange"
 _global_position_size: float = POSITION_SIZE_USD
 _exchange_sizes: dict[str, float] = {}  # {"Backpack": 100, "Lighter": 200, ...}
 
+# Настройки защиты (можно менять в боте)
+_protection_enabled: bool = True
+_price_close_pct: float = PRICE_AUTO_CLOSE_PCT   # % падения цены → закрыть
+_neg_apr_hours: float = NEG_APR_WAIT_HOURS        # часов в минусе → закрыть
+
 # Какие биржи включены для сигналов
 _enabled_exchanges: set[str] = set(EXCHANGES.values())  # все по умолчанию
 
@@ -118,6 +123,7 @@ def get_position_size(exchange_name: str) -> float:
 async def _load_settings():
     """Загружает настройки из БД при старте."""
     global _position_size_mode, _global_position_size, _exchange_sizes, _enabled_exchanges
+    global _protection_enabled, _price_close_pct, _neg_apr_hours
 
     mode = await load_setting("position_size_mode", "global")
     _position_size_mode = mode
@@ -137,6 +143,10 @@ async def _load_settings():
     else:
         _enabled_exchanges = set(EXCHANGES.values())
 
+    _protection_enabled = (await load_setting("protection_enabled", "1")) == "1"
+    _price_close_pct = float(await load_setting("price_close_pct", str(PRICE_AUTO_CLOSE_PCT)))
+    _neg_apr_hours = float(await load_setting("neg_apr_hours", str(NEG_APR_WAIT_HOURS)))
+
 
 async def _save_settings():
     """Сохраняет текущие настройки в БД."""
@@ -144,6 +154,9 @@ async def _save_settings():
     await save_setting("global_position_size", str(_global_position_size))
     await save_setting("exchange_sizes", json.dumps(_exchange_sizes))
     await save_setting("enabled_exchanges", ",".join(_enabled_exchanges))
+    await save_setting("protection_enabled", "1" if _protection_enabled else "0")
+    await save_setting("price_close_pct", str(_price_close_pct))
+    await save_setting("neg_apr_hours", str(_neg_apr_hours))
 
 
 # ─── Сканирование ────────────────────────────────────────────────────────────
@@ -266,6 +279,9 @@ async def _monitor_open_pairs(exchange_rates: dict):
             return f"{l['exchange']} <code>{rates_map.get(key, dummy).apr:+.1f}%</code>"
 
         # ── Проверка APR ─────────────────────────────────────────────────────
+        if not _protection_enabled:
+            continue
+
         if net_apr < NEG_APR_HARD_CLOSE:
             logger.warning(f"Автозакрытие {symbol}: нетто APR={net_apr:.1f}%")
             _negative_funding_since.pop(pair_id, None)
@@ -289,13 +305,13 @@ async def _monitor_open_pairs(exchange_rates: dict):
                     await send_message(
                         MSG["negative_funding_alert"].format(
                             symbol=symbol, apr_details=apr_details,
-                            net_apr=net_apr, wait_hours=int(NEG_APR_WAIT_HOURS),
+                            net_apr=net_apr, wait_hours=int(_neg_apr_hours),
                         ),
                         reply_markup=keyboard,
                     )
             else:
                 hours_waited = (time.time() - _negative_funding_since[pair_id]) / 3600
-                if hours_waited >= NEG_APR_WAIT_HOURS:
+                if hours_waited >= _neg_apr_hours:
                     logger.warning(f"Автозакрытие {symbol}: фандинг в минусе {hours_waited:.1f}ч")
                     _negative_funding_since.pop(pair_id, None)
                     await _auto_close_pair(
@@ -359,7 +375,7 @@ async def _monitor_open_pairs(exchange_rates: dict):
 
                         direction_str = MSG["price_went_down"] if leg["direction"] == "LONG" else MSG["price_went_up"]
 
-                        if loss_pct >= PRICE_AUTO_CLOSE_PCT:
+                        if loss_pct >= _price_close_pct:
                             await _auto_close_pair(
                                 pair_id, symbol, legs,
                                 reason=MSG["auto_close_reason_price"].format(
@@ -380,7 +396,7 @@ async def _monitor_open_pairs(exchange_rates: dict):
                                     MSG["price_risk_alert"].format(
                                         symbol=symbol, exchange=exch_name, direction=leg["direction"],
                                         direction_str=direction_str, loss=loss_pct,
-                                        entry=entry, current=cur_price, threshold=PRICE_AUTO_CLOSE_PCT,
+                                        entry=entry, current=cur_price, threshold=_price_close_pct,
                                     ),
                                     reply_markup=keyboard,
                                 )
@@ -635,11 +651,46 @@ def _build_settings() -> tuple:
         parts = [f"{n}: <code>${_exchange_sizes.get(n, _global_position_size):.0f}</code>" for n in sorted(_enabled_exchanges)]
         desc = MSG["settings_mode_per_exchange"] + "\n" + "\n".join(parts)
 
+    # Секция защиты
+    rows.append([InlineKeyboardButton("─── Защита позиций ───", callback_data="noop")])
+    prot_label = "✅ Защита включена" if _protection_enabled else "❌ Защита выключена"
+    rows.append([InlineKeyboardButton(prot_label, callback_data="toggle_protection")])
+
+    if _protection_enabled:
+        rows.append([InlineKeyboardButton(
+            f"📉 Закрыть при падении цены: {_price_close_pct:.0f}%", callback_data="noop"
+        )])
+        rows.append([
+            InlineKeyboardButton(f"{'▶ ' if _price_close_pct == 10 else ''}10%", callback_data="set_price_pct:10"),
+            InlineKeyboardButton(f"{'▶ ' if _price_close_pct == 15 else ''}15%", callback_data="set_price_pct:15"),
+            InlineKeyboardButton(f"{'▶ ' if _price_close_pct == 20 else ''}20%", callback_data="set_price_pct:20"),
+            InlineKeyboardButton(f"{'▶ ' if _price_close_pct == 25 else ''}25%", callback_data="set_price_pct:25"),
+            InlineKeyboardButton(f"{'▶ ' if _price_close_pct == 30 else ''}30%", callback_data="set_price_pct:30"),
+        ])
+        rows.append([InlineKeyboardButton(
+            f"📊 Закрыть при минус-фандинге: {_neg_apr_hours:.0f}ч", callback_data="noop"
+        )])
+        rows.append([
+            InlineKeyboardButton(f"{'▶ ' if _neg_apr_hours == 1 else ''}1ч", callback_data="set_neg_hours:1"),
+            InlineKeyboardButton(f"{'▶ ' if _neg_apr_hours == 2 else ''}2ч", callback_data="set_neg_hours:2"),
+            InlineKeyboardButton(f"{'▶ ' if _neg_apr_hours == 4 else ''}4ч", callback_data="set_neg_hours:4"),
+            InlineKeyboardButton(f"{'▶ ' if _neg_apr_hours == 6 else ''}6ч", callback_data="set_neg_hours:6"),
+            InlineKeyboardButton(f"{'▶ ' if _neg_apr_hours == 12 else ''}12ч", callback_data="set_neg_hours:12"),
+            InlineKeyboardButton(f"{'▶ ' if _neg_apr_hours == 24 else ''}24ч", callback_data="set_neg_hours:24"),
+        ])
+
+    prot_desc = ""
+    if _protection_enabled:
+        prot_desc = f"\n\n🛡 Защита: закрытие при падении &gt;{_price_close_pct:.0f}% или минус-фандинге &gt;{_neg_apr_hours:.0f}ч"
+    else:
+        prot_desc = "\n\n⚠️ Защита выключена — автозакрытие не работает"
+
     enabled_list = ", ".join(sorted(_enabled_exchanges)) or MSG["settings_none_enabled"]
     text = (
         f"{MSG['settings_title']}\n\n"
         f"{MSG['settings_enabled']}: {enabled_list}\n"
         f"{desc}"
+        f"{prot_desc}"
     )
     return text, InlineKeyboardMarkup(rows)
 
@@ -945,6 +996,25 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _exchange_sizes[target] = size
             await _save_settings()
             await _refresh_settings(query)
+
+    # ── Настройки защиты ────────────────────────────────────────────────────
+    elif data == "toggle_protection":
+        global _protection_enabled
+        _protection_enabled = not _protection_enabled
+        await _save_settings()
+        await _refresh_settings(query)
+
+    elif data.startswith("set_price_pct:"):
+        global _price_close_pct
+        _price_close_pct = float(data.split(":")[1])
+        await _save_settings()
+        await _refresh_settings(query)
+
+    elif data.startswith("set_neg_hours:"):
+        global _neg_apr_hours
+        _neg_apr_hours = float(data.split(":")[1])
+        await _save_settings()
+        await _refresh_settings(query)
 
     # ── Пагинация истории ────────────────────────────────────────────────────
     elif data.startswith("history_page:"):
