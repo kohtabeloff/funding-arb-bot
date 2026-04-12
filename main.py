@@ -732,7 +732,7 @@ def _build_settings() -> tuple:
         rows.append([InlineKeyboardButton(
             f"📉 Закрыть при APR ниже: {_neg_apr_hard_close:.0f}%", callback_data="noop"
         )])
-        _apr_presets = [-20, -30, -50, -100, -200]
+        _apr_presets = [-15, -25, -35, -50, -100]
         rows.append([
             InlineKeyboardButton(f"{'▶ ' if _neg_apr_hard_close == v else ''}{v}%", callback_data=f"set_apr_hard:{v}")
             for v in _apr_presets
