@@ -49,23 +49,28 @@ async def send_pair_signal(opp: dict, size_usd: float = 0) -> None:
     fee_b = EXCHANGE_FEES.get(exch_b, "?")
     net_apr = opp['net_apr']
 
-    # Стрик фандинга (сколько часов держится выгодный APR)
+    # Стрик пары — как давно Net APR положительный (минимум из двух ног)
     streak_a = opp.get("streak_a")
     streak_b = opp.get("streak_b")
+    if streak_a is not None and streak_b is not None:
+        pair_streak = min(streak_a, streak_b)
+    else:
+        pair_streak = streak_a or streak_b  # если одна нога ещё без истории
 
-    def _streak_str(hours: float | None) -> str:
-        if hours is None or hours < 1:
+    def _pair_streak_str(hours: float | None) -> str:
+        if hours is None:
             return ""
+        if hours < 1:
+            return " ⏱ <1ч"
         if hours < 24:
             return f" ⏱ {hours:.0f}ч"
-        days = hours / 24
-        return f" ⏱ {days:.1f}д"
+        return f" ⏱ {hours / 24:.1f}д"
 
     text = (
         f"🔀 <b>{esc(symbol)}</b> — {esc(exch_a)} × {esc(exch_b)}\n\n"
-        f"{esc(exch_a)} ({dir_a_str}): <code>{eff_a:+.1f}%</code>{_streak_str(streak_a)}\n"
-        f"{esc(exch_b)} ({dir_b_str}): <code>{eff_b:+.1f}%</code>{_streak_str(streak_b)}\n"
-        f"{MSG['signal_net_apr']}: ~{net_apr:.1f}% APR\n\n"
+        f"{esc(exch_a)} ({dir_a_str}): <code>{eff_a:+.1f}%</code>\n"
+        f"{esc(exch_b)} ({dir_b_str}): <code>{eff_b:+.1f}%</code>\n"
+        f"{MSG['signal_net_apr']}: ~{net_apr:.1f}% APR{_pair_streak_str(pair_streak)}\n\n"
         f"💸 {esc(exch_a)}: {fee_a} {MSG['signal_fee']} | {esc(exch_b)}: {fee_b}"
     )
 
