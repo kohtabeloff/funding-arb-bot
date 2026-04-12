@@ -331,14 +331,32 @@ To increase the size of an already open pair:
 In **⚙️ Settings** you can:
 - Enable and disable individual exchanges
 - Choose position size mode: **global** (same size for all) or **per-exchange** (separate size for each)
+- Configure automatic protection parameters (see below)
 
 ### Automatic protection
 
 The bot closes a pair automatically if:
 - Net APR drops below **−50%**
-- APR goes negative and **doesn't recover within 4 hours**
-- Price moves against any leg by more than **15%** from entry (warning at 10%)
+- APR goes negative and doesn't recover within the configured time
+- Price moves against any leg by more than the configured threshold from entry
 - Any leg is less than **15%** from liquidation (warning at 20%)
+
+All protection thresholds are configurable directly in **⚙️ Settings → Protection**:
+- **On/Off** — enable or disable automatic protection entirely
+- **Price drop %** — close if price moves against a leg by this much (presets: 15 / 25 / 35 / 50 / 100%, or enter manually)
+- **Negative funding hours** — close if Net APR stays negative for this long (presets: 1 / 2 / 4 / 6 / 12 / 24h, or enter manually)
+
+Settings are saved to the database and persist across restarts.
+
+### Funding streak in signals
+
+Every signal and manual scan shows how long the pair's Net APR has been positive:
+
+```
+Net APR: ~38.5% ⏱ 47h
+```
+
+This helps you prioritize pairs with a proven track record. Short dips into negative (up to 4 hours) are ignored and don't reset the counter. The counter resets on bot restart.
 
 ---
 
