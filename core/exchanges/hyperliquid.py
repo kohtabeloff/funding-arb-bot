@@ -105,6 +105,14 @@ class HyperliquidExecutor(BaseExchangeExecutor):
         exchange = self._get_exchange()
         price = await self.get_mark_price(symbol)
 
+        # Проверяем реальную позицию на бирже перед закрытием
+        positions = await self.get_positions()
+        if positions is not None:
+            pos = next((p for p in positions if p["symbol"] == symbol), None)
+            if pos is None or abs(pos["quantity"]) == 0:
+                logger.info(f"Hyperliquid: позиция {symbol} уже закрыта на бирже")
+                return {"symbol": symbol, "price": price, "fee": 0}
+
         if size > 0:
             # Закрываем через reduce-only ордер — не перевернёт позицию если размер в БД устарел
             sz_decimals = self._get_sz_decimals(symbol)

@@ -166,21 +166,19 @@ class BackpackExecutor(BaseExchangeExecutor):
         bp_symbol = self._bp_symbol(symbol)
         mark_price = await self.get_mark_price(symbol)
 
+        # Всегда проверяем реальную позицию на бирже перед закрытием
+        raw_positions = await self._get_raw_positions()
+        pos = next((p for p in raw_positions if p.get("symbol") == bp_symbol), None)
+        real_qty = float(pos.get("netQuantity") or pos.get("quantity") or 0) if pos else 0
+        if real_qty == 0:
+            logger.info(f"Backpack: позиция {symbol} уже закрыта на бирже")
+            return {"symbol": symbol, "closed_qty": 0, "price": mark_price}
+
         if size > 0:
-            # Размер известен — закрываем по нему
             side = "Ask" if was_long else "Bid"
             qty = size
         else:
-            raw_positions = await self._get_raw_positions()
-            if raw_positions is None:
-                raise RuntimeError(f"Backpack: не удалось получить позиции для закрытия {symbol}")
-            pos = next((p for p in raw_positions if p.get("symbol") == bp_symbol), None)
-            if not pos:
-                logger.info(f"Backpack: позиция {symbol} не найдена — считаем закрытой")
-                return {"symbol": symbol, "closed_qty": 0, "price": 0}
-            qty = float(pos.get("netQuantity") or pos.get("quantity") or 0)
-            if qty == 0:
-                return {"symbol": symbol, "closed_qty": 0, "price": 0}
+            qty = real_qty
             side = "Ask" if qty > 0 else "Bid"
 
         params = {
