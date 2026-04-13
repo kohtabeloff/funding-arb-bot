@@ -329,42 +329,44 @@ async def _verify_positions(exchange_rates: dict):
 async def _handle_orphan_leg(pair_id: str, symbol: str, leg: dict):
     """
     Одна нога пары осталась открытой после частичного закрытия.
-    Шлём алерт и закрываем автоматически.
+    Шлём алерт (с cooldown) и пытаемся закрыть каждый цикл мониторинга.
     """
-    alert_key = f"orphan:{pair_id}:{leg['exchange']}"
-    now = time.time()
-    if now - _orphan_alerts_sent.get(alert_key, 0) < ORPHAN_ALERT_COOLDOWN_SECONDS:
-        return
-    _orphan_alerts_sent[alert_key] = now
-
     exch = leg["exchange"]
     direction = leg["direction"]
     size_usd = leg.get("position_size_usd", 0)
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("❌ Закрыть вручную", callback_data=f"close:{leg['id']}:{symbol}")
-    ]])
-    await send_message(
-        f"⚠️ <b>Осиротевшая нога пары!</b>\n\n"
-        f"<b>{symbol}</b> — {exch} ({direction}), ${size_usd:.0f}\n"
-        f"Одна нога уже закрыта, эта осталась незахеджированной.\n"
-        f"🤖 Закрываю автоматически...",
-        reply_markup=keyboard,
-    )
+    # Алерт — не чаще раза в 30 минут
+    alert_key = f"orphan:{pair_id}:{exch}"
+    now = time.time()
+    send_alert = now - _orphan_alerts_sent.get(alert_key, 0) >= ORPHAN_ALERT_COOLDOWN_SECONDS
 
+    # Попытка закрытия — каждый цикл мониторинга (без cooldown)
     try:
         async with _trade_lock:
             executor = get_executor(exch)
             was_long = (direction == "LONG")
             await executor.market_close(symbol, leg["size"], was_long)
             await mark_position_closed(leg["id"])
-        await send_message(f"✅ <b>{symbol}</b> ({exch}) — осиротевшая нога закрыта автоматически.")
+        # Закрылось — сообщаем
+        await send_message(
+            f"✅ <b>{symbol}</b> ({exch}) — осиротевшая нога закрыта автоматически."
+        )
+        _orphan_alerts_sent.pop(alert_key, None)  # сбрасываем cooldown
     except Exception as e:
         logger.error(f"Не удалось закрыть осиротевшую ногу {pair_id} {exch}: {e}")
-        await send_message(
-            f"❌ <b>{symbol}</b> ({exch}) — не удалось закрыть автоматически: {e}\n"
-            f"⚠️ Закрой вручную немедленно!"
-        )
+        if send_alert:
+            _orphan_alerts_sent[alert_key] = now
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Закрыть вручную", callback_data=f"close:{leg['id']}:{symbol}")
+            ]])
+            await send_message(
+                f"⚠️ <b>Осиротевшая нога пары!</b>\n\n"
+                f"<b>{symbol}</b> — {exch} ({direction}), ${size_usd:.0f}\n"
+                f"Одна нога уже закрыта, эта осталась незахеджированной.\n"
+                f"❌ Автозакрытие не удалось: {e}\n"
+                f"⚠️ Закрой вручную немедленно!",
+                reply_markup=keyboard,
+            )
 
 
 # ─── Мониторинг открытых пар ─────────────────────────────────────────────────

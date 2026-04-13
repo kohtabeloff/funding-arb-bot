@@ -232,8 +232,11 @@ class AsterExecutor(BaseExchangeExecutor):
             logger.info(f"Aster: позиция {symbol} уже закрыта на бирже")
             return {"symbol": symbol, "price": price, "fee": 0}
 
+        # Берём минимум из размера в БД и реального — чтобы reduceOnly не падал
         if size <= 0:
             size = real_size
+        else:
+            size = min(size, real_size)
 
         quantity = self._round_qty(aster_sym, size)
         side = "SELL" if was_long else "BUY"
