@@ -171,9 +171,11 @@ class GRVTExecutor(BaseExchangeExecutor):
         price = await self.get_mark_price(symbol)
 
         # Проверяем реальный размер позиции на бирже
+        # None означает что get_positions вернул пусто (нет позиций или ошибка авторизации)
+        # В обоих случаях — позиции нет, считаем закрытой
         real_size = await self._get_position_size(symbol)
-        if real_size is not None and abs(real_size) == 0:
-            logger.info(f"GRVT: позиция {symbol} уже закрыта на бирже")
+        if real_size is None or abs(real_size) == 0:
+            logger.info(f"GRVT: позиция {symbol} уже закрыта на бирже (real_size={real_size})")
             return {"symbol": symbol, "price": price, "fee": 0}
 
         # Закрываем: если был лонг → sell, если шорт → buy

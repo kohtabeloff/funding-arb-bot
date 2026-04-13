@@ -1065,7 +1065,28 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.HTML,
             )
         except Exception as e:
-            await query.edit_message_text(MSG["close_error"].format(error=e), parse_mode=ParseMode.HTML)
+            err_kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔧 Закрыть в БД (позиции уже нет)", callback_data=f"force_close_pos:{pos_id}:{symbol}")
+            ]])
+            await query.edit_message_text(
+                MSG["close_error"].format(error=e),
+                parse_mode=ParseMode.HTML,
+                reply_markup=err_kb,
+            )
+
+    # ── Принудительное закрытие одиночной позиции в БД ───────────────────────
+    elif data.startswith("force_close_pos:"):
+        parts = data.split(":")
+        pos_id = parts[1]
+        symbol = parts[2] if len(parts) > 2 else "?"
+        try:
+            await mark_position_closed(pos_id)
+            await query.edit_message_text(
+                f"✅ <b>{symbol}</b> закрыт в БД.\nПозицию на бирже проверь вручную.",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception as e:
+            await query.edit_message_text(f"❌ Ошибка: {e}", parse_mode=ParseMode.HTML)
 
     # ── Scale in ─────────────────────────────────────────────────────────────
     elif data.startswith("scale_in:"):
