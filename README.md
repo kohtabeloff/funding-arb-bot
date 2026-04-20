@@ -71,6 +71,7 @@ A VPS is a remote server that runs your bot 24/7. Without it, the bot only works
 
 ### Where to buy (card or crypto)
 
+- **[HIP Hosting](https://hip.hosting/?code=e7ba57714b589e715371)** ⭐ — best price/performance ratio. Crypto accepted. Servers aren't always in stock, but worth checking back regularly
 - **[Vultr](https://www.vultr.com/)** — card or crypto, servers worldwide
 - **[Hetzner](https://www.hetzner.com/)** — reliable, affordable, European servers
 - **[DigitalOcean](https://www.digitalocean.com/)** — beginner-friendly
