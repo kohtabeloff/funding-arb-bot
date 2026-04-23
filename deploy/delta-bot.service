@@ -1,0 +1,17 @@
+[Unit]
+Description=Delta-Neutral Funding Bot
+After=network.target
+Wants=network-online.target
+
+[Service]
+User=r2d2
+WorkingDirectory=/home/r2d2/funding-arb-bot
+ExecStart=/home/r2d2/funding-arb-bot/venv/bin/python main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=/home/r2d2/funding-arb-bot/.env
+
+[Install]
+WantedBy=multi-user.target

@@ -41,6 +41,9 @@ async def init_db():
                 fees_usd REAL DEFAULT NULL
             )
         """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_positions_pair_id ON positions (pair_id)"
+        )
         await db.execute("""
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
