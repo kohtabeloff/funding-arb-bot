@@ -719,9 +719,9 @@ async def _refresh_settings(query):
     text, markup = _build_settings()
     try:
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
-    except Exception:
-        # Если edit не сработал (например, текст не изменился) — ничего страшного
-        pass
+    except Exception as e:
+        if "message is not modified" not in str(e).lower():
+            logger.warning(f"_refresh_settings: {e}")
 
 
 def _build_settings() -> tuple:
@@ -757,13 +757,14 @@ def _build_settings() -> tuple:
         ),
     ])
 
+    _size_presets = [15, 50, 100, 250, 500]
     if is_global:
         rows.append([
-            InlineKeyboardButton("$15", callback_data="setsize:global:15"),
-            InlineKeyboardButton("$50", callback_data="setsize:global:50"),
-            InlineKeyboardButton("$100", callback_data="setsize:global:100"),
-            InlineKeyboardButton("$250", callback_data="setsize:global:250"),
-            InlineKeyboardButton("$500", callback_data="setsize:global:500"),
+            InlineKeyboardButton(
+                f"{'▶ ' if _global_position_size == v else ''}${v}",
+                callback_data=f"setsize:global:{v}"
+            )
+            for v in _size_presets
         ])
         rows.append([InlineKeyboardButton(MSG["settings_enter_manual"], callback_data="setsize:global:manual")])
     else:
@@ -773,11 +774,11 @@ def _build_settings() -> tuple:
             size = _exchange_sizes.get(exch_name, _global_position_size)
             rows.append([InlineKeyboardButton(f"── {exch_name} (${size:.0f}) ──", callback_data="noop")])
             rows.append([
-                InlineKeyboardButton("$15", callback_data=f"setsize:{exch_name}:15"),
-                InlineKeyboardButton("$50", callback_data=f"setsize:{exch_name}:50"),
-                InlineKeyboardButton("$100", callback_data=f"setsize:{exch_name}:100"),
-                InlineKeyboardButton("$250", callback_data=f"setsize:{exch_name}:250"),
-                InlineKeyboardButton("$500", callback_data=f"setsize:{exch_name}:500"),
+                InlineKeyboardButton(
+                    f"{'▶ ' if size == v else ''}${v}",
+                    callback_data=f"setsize:{exch_name}:{v}"
+                )
+                for v in _size_presets
             ])
             rows.append([InlineKeyboardButton(MSG["settings_enter_exchange"].format(exch=exch_name), callback_data=f"setsize:{exch_name}:manual")])
 
