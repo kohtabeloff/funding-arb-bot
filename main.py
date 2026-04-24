@@ -755,10 +755,17 @@ def _apply_preset_data(data: dict):
     global _position_size_mode, _global_position_size, _exchange_sizes, _enabled_exchanges
     global _protection_enabled, _neg_apr_hard_close, _neg_apr_hours, _price_close_pct
 
+    valid_exchanges = set(EXCHANGES.values())
+
     _position_size_mode = data.get("position_size_mode", _position_size_mode)
     _global_position_size = float(data.get("global_position_size", _global_position_size))
-    _exchange_sizes = data.get("exchange_sizes", _exchange_sizes)
-    _enabled_exchanges = set(data.get("enabled_exchanges", list(_enabled_exchanges)))
+    # Глубокая копия — чтобы изменения не влияли на сохранённый пресет
+    raw_sizes = data.get("exchange_sizes")
+    _exchange_sizes = dict(raw_sizes) if raw_sizes is not None else dict(_exchange_sizes)
+    # Фильтруем биржи из пресета — оставляем только реально существующие
+    raw_exchanges = data.get("enabled_exchanges")
+    if raw_exchanges is not None:
+        _enabled_exchanges = set(raw_exchanges) & valid_exchanges
     _protection_enabled = data.get("protection_enabled", _protection_enabled)
     _neg_apr_hard_close = float(data.get("neg_apr_hard_close", _neg_apr_hard_close))
     _neg_apr_hours = float(data.get("neg_apr_hours", _neg_apr_hours))
@@ -1315,10 +1322,12 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Блэклист — добавить ───────────────────────────────────────────────────
     elif data.startswith("blacklist_add:"):
-        symbol = data.split(":", 1)[1]
+        symbol = data.split(":", 1)[1].strip().upper()
+        if not symbol:
+            return
         await add_to_blacklist(symbol)
-        if symbol.upper() not in _blacklist:
-            _blacklist.append(symbol.upper())
+        if symbol not in _blacklist:
+            _blacklist.append(symbol)
         await query.edit_message_text(
             MSG["blacklist_added"].format(symbol=symbol),
             parse_mode=ParseMode.HTML,
@@ -1344,7 +1353,12 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         preset_id = int(data.split(":")[1])
         preset = next((p for p in _presets if p["id"] == preset_id), None)
         if preset:
-            _apply_preset_data(json.loads(preset["data"]))
+            try:
+                _apply_preset_data(json.loads(preset["data"]))
+            except (json.JSONDecodeError, ValueError, KeyError) as e:
+                logger.error(f"Ошибка применения пресета {preset_id}: {e}")
+                await query.answer("❌ Пресет повреждён", show_alert=True)
+                return
             await _save_settings()
             await _refresh_settings(query)
             await query.answer(MSG["preset_applied"].format(name=preset["name"]), show_alert=False)
@@ -1455,8 +1469,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Ввод названия пресета
     elif _waiting_for_preset_name:
         _waiting_for_preset_name = False
-        name = text.strip()[:50]  # ограничиваем длину
-        if name:
+        name = text.strip()[:50]
+        if not name:
+            return
+        try:
             data_json = json.dumps(_current_settings_as_dict())
             preset_id = await save_preset(name, data_json)
             _presets.append({"id": preset_id, "name": name, "data": data_json})
@@ -1464,6 +1480,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 MSG["preset_saved"].format(name=name),
                 parse_mode=ParseMode.HTML,
             )
+        except Exception as e:
+            logger.error(f"Ошибка сохранения пресета: {e}")
+            await update.message.reply_text("❌ Не удалось сохранить пресет")
         return
 
     # Ввод суммы для scale_in
