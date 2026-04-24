@@ -56,7 +56,7 @@ async def send_pair_signal(opp: dict, size_usd: float = 0) -> None:
         if hours is None:
             return ""
         if hours < 1:
-            return " ⏱ <1ч"
+            return " ⏱ &lt;1ч"
         if hours < 24:
             return f" ⏱ {hours:.0f}ч"
         return f" ⏱ {hours / 24:.1f}д"
