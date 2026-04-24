@@ -167,6 +167,23 @@ RU = {
     # ─── Signal (bot/telegram.py) ────────────────────────────────────────────
     "signal_net_apr": "📈 Нетто",
     "signal_fee": "комиссия",
+    "signal_price_spread": "💱 Спред цен: ~{spread:.2f}% (туда-обратно: ~{roundtrip:.2f}%)",
+    "signal_breakeven": "⏳ Окупится: ~{days:.1f}д",
+
+    # ─── Blacklist ───────────────────────────────────────────────────────────
+    "btn_blacklist": "🚫 В чёрный список",
+    "blacklist_added": "🚫 <b>{symbol}</b> добавлен в чёрный список",
+    "settings_blacklist_header": "── Чёрный список ({count}) ──",
+    "blacklist_empty": "Чёрный список пуст",
+
+    # ─── Presets ─────────────────────────────────────────────────────────────
+    "settings_presets_header": "── Пресеты ──",
+    "preset_save_btn": "💾 Сохранить текущие",
+    "preset_saved": "✅ Пресет «{name}» сохранён",
+    "preset_applied": "✅ Пресет «{name}» применён",
+    "preset_deleted": "✅ Пресет удалён",
+    "preset_enter_name": "✏️ Введи название пресета:",
+    "presets_no_presets": "Пресетов пока нет",
 }
 
 EN = {
@@ -337,4 +354,21 @@ EN = {
     # ─── Signal (bot/telegram.py) ────────────────────────────────────────────
     "signal_net_apr": "📈 Net",
     "signal_fee": "fee",
+    "signal_price_spread": "💱 Price spread: ~{spread:.2f}% (round-trip: ~{roundtrip:.2f}%)",
+    "signal_breakeven": "⏳ Breakeven: ~{days:.1f}d",
+
+    # ─── Blacklist ───────────────────────────────────────────────────────────
+    "btn_blacklist": "🚫 Blacklist",
+    "blacklist_added": "🚫 <b>{symbol}</b> added to blacklist",
+    "settings_blacklist_header": "── Blacklist ({count}) ──",
+    "blacklist_empty": "Blacklist is empty",
+
+    # ─── Presets ─────────────────────────────────────────────────────────────
+    "settings_presets_header": "── Presets ──",
+    "preset_save_btn": "💾 Save current",
+    "preset_saved": "✅ Preset «{name}» saved",
+    "preset_applied": "✅ Preset «{name}» applied",
+    "preset_deleted": "✅ Preset deleted",
+    "preset_enter_name": "✏️ Enter preset name:",
+    "presets_no_presets": "No presets yet",
 }

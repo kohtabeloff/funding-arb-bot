@@ -33,6 +33,8 @@ from db.database import (
     get_open_pairs, get_positions_by_pair, get_closed_pairs, count_closed_pairs,
     get_position_by_id, mark_position_closed,
     save_setting, load_setting, get_avg_rate_since, get_avg_rate_between,
+    add_to_blacklist, remove_from_blacklist, get_blacklist,
+    save_preset, get_presets, delete_preset,
 )
 
 logging.basicConfig(
@@ -93,6 +95,11 @@ _waiting_for_scale_in: tuple | None = None
 _waiting_for_apr_hard: bool = False        # ожидаем ввод порога APR вручную
 _waiting_for_neg_hours: bool = False       # ожидаем ввод часов вручную
 _waiting_for_price_pct: bool = False       # ожидаем ввод % падения цены вручную
+_waiting_for_preset_name: bool = False     # ожидаем название нового пресета
+
+# Кэши блэклиста и пресетов (загружаются из БД при старте)
+_blacklist: list[str] = []
+_presets: list[dict] = []  # [{id, name, data}, ...]
 
 # ─── Кнопки ──────────────────────────────────────────────────────────────────
 BTN_POSITIONS = MSG["btn_positions"]
@@ -159,6 +166,10 @@ async def _load_settings():
     _neg_apr_hard_close = float(await load_setting("neg_apr_hard_close", str(NEG_APR_HARD_CLOSE)))
     _neg_apr_hours = float(await load_setting("neg_apr_hours", str(NEG_APR_WAIT_HOURS)))
     _price_close_pct = float(await load_setting("price_close_pct", str(PRICE_AUTO_CLOSE_PCT)))
+
+    global _blacklist, _presets
+    _blacklist = await get_blacklist()
+    _presets = await get_presets()
 
 
 async def _save_settings():
@@ -558,10 +569,11 @@ def _enrich_opp_with_streaks(opp: dict) -> dict:
 
 async def _scan_opportunities(exchange_rates: dict):
     """Ищет пары и отправляет сигналы."""
-    opps = find_pair_opportunities(exchange_rates, _enabled_exchanges)
+    bl = set(_blacklist)
+    opps = find_pair_opportunities(exchange_rates, _enabled_exchanges, blacklist=bl)
 
     # Стрики считаем по ВСЕМ парам с положительным Net APR (без порога сигнала)
-    all_positive = find_pair_opportunities(exchange_rates, _enabled_exchanges, min_pair_apr=0)
+    all_positive = find_pair_opportunities(exchange_rates, _enabled_exchanges, min_pair_apr=0, blacklist=bl)
     _update_pair_net_streaks(all_positive)
 
     if not opps:
@@ -724,6 +736,35 @@ async def _refresh_settings(query):
             logger.warning(f"_refresh_settings: {e}")
 
 
+def _current_settings_as_dict() -> dict:
+    """Собирает текущие настройки в словарь для сохранения в пресет."""
+    return {
+        "position_size_mode": _position_size_mode,
+        "global_position_size": _global_position_size,
+        "exchange_sizes": dict(_exchange_sizes),
+        "enabled_exchanges": list(_enabled_exchanges),
+        "protection_enabled": _protection_enabled,
+        "neg_apr_hard_close": _neg_apr_hard_close,
+        "neg_apr_hours": _neg_apr_hours,
+        "price_close_pct": _price_close_pct,
+    }
+
+
+def _apply_preset_data(data: dict):
+    """Применяет словарь настроек из пресета к глобальным переменным."""
+    global _position_size_mode, _global_position_size, _exchange_sizes, _enabled_exchanges
+    global _protection_enabled, _neg_apr_hard_close, _neg_apr_hours, _price_close_pct
+
+    _position_size_mode = data.get("position_size_mode", _position_size_mode)
+    _global_position_size = float(data.get("global_position_size", _global_position_size))
+    _exchange_sizes = data.get("exchange_sizes", _exchange_sizes)
+    _enabled_exchanges = set(data.get("enabled_exchanges", list(_enabled_exchanges)))
+    _protection_enabled = data.get("protection_enabled", _protection_enabled)
+    _neg_apr_hard_close = float(data.get("neg_apr_hard_close", _neg_apr_hard_close))
+    _neg_apr_hours = float(data.get("neg_apr_hours", _neg_apr_hours))
+    _price_close_pct = float(data.get("price_close_pct", _price_close_pct))
+
+
 def _build_settings() -> tuple:
     """Строит текст и клавиатуру для меню настроек. Используется и при показе, и при обновлении."""
     rows = []
@@ -823,6 +864,28 @@ def _build_settings() -> tuple:
             for v in _pct_presets
         ])
         rows.append([InlineKeyboardButton("✏️ Указать вручную", callback_data="set_price_pct:manual")])
+
+    # Секция чёрного списка
+    rows.append([InlineKeyboardButton(
+        MSG["settings_blacklist_header"].format(count=len(_blacklist)), callback_data="noop"
+    )])
+    if _blacklist:
+        for sym in sorted(_blacklist):
+            rows.append([InlineKeyboardButton(f"🗑 {sym}", callback_data=f"blacklist_remove:{sym}")])
+    else:
+        rows.append([InlineKeyboardButton(MSG["blacklist_empty"], callback_data="noop")])
+
+    # Секция пресетов
+    rows.append([InlineKeyboardButton(MSG["settings_presets_header"], callback_data="noop")])
+    if _presets:
+        for preset in _presets:
+            rows.append([
+                InlineKeyboardButton(f"▶ {preset['name']}", callback_data=f"preset_apply:{preset['id']}"),
+                InlineKeyboardButton("🗑", callback_data=f"preset_delete:{preset['id']}"),
+            ])
+    else:
+        rows.append([InlineKeyboardButton(MSG["presets_no_presets"], callback_data="noop")])
+    rows.append([InlineKeyboardButton(MSG["preset_save_btn"], callback_data="preset_save")])
 
     prot_desc = ""
     if _protection_enabled:
@@ -964,7 +1027,8 @@ async def scan_manual(update: Update):
         await msg.edit_text(MSG["no_exchange_data"])
         return
 
-    opps = find_pair_opportunities(exchange_rates, _enabled_exchanges)
+    bl = set(_blacklist)
+    opps = find_pair_opportunities(exchange_rates, _enabled_exchanges, blacklist=bl)
 
     if not opps:
         await msg.edit_text(MSG["no_pairs"])
@@ -972,7 +1036,7 @@ async def scan_manual(update: Update):
 
     await msg.delete()
 
-    all_positive = find_pair_opportunities(exchange_rates, _enabled_exchanges, min_pair_apr=0)
+    all_positive = find_pair_opportunities(exchange_rates, _enabled_exchanges, min_pair_apr=0, blacklist=bl)
     _update_pair_net_streaks(all_positive)
     for opp in opps:
         _enrich_opp_with_streaks(opp)
@@ -1249,10 +1313,53 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text, keyboard = await _build_history_page(page)
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
+    # ── Блэклист — добавить ───────────────────────────────────────────────────
+    elif data.startswith("blacklist_add:"):
+        symbol = data.split(":", 1)[1]
+        await add_to_blacklist(symbol)
+        if symbol.upper() not in _blacklist:
+            _blacklist.append(symbol.upper())
+        await query.edit_message_text(
+            MSG["blacklist_added"].format(symbol=symbol),
+            parse_mode=ParseMode.HTML,
+        )
+
+    # ── Блэклист — удалить ────────────────────────────────────────────────────
+    elif data.startswith("blacklist_remove:"):
+        symbol = data.split(":", 1)[1]
+        await remove_from_blacklist(symbol)
+        if symbol in _blacklist:
+            _blacklist.remove(symbol)
+        await _refresh_settings(query)
+
+    # ── Пресеты — сохранить ───────────────────────────────────────────────────
+    elif data == "preset_save":
+        global _waiting_for_preset_name
+        _waiting_for_preset_name = True
+        await query.message.delete()
+        await query.message.chat.send_message(MSG["preset_enter_name"])
+
+    # ── Пресеты — применить ───────────────────────────────────────────────────
+    elif data.startswith("preset_apply:"):
+        preset_id = int(data.split(":")[1])
+        preset = next((p for p in _presets if p["id"] == preset_id), None)
+        if preset:
+            _apply_preset_data(json.loads(preset["data"]))
+            await _save_settings()
+            await _refresh_settings(query)
+            await query.answer(MSG["preset_applied"].format(name=preset["name"]), show_alert=False)
+
+    # ── Пресеты — удалить ─────────────────────────────────────────────────────
+    elif data.startswith("preset_delete:"):
+        preset_id = int(data.split(":")[1])
+        await delete_preset(preset_id)
+        _presets[:] = [p for p in _presets if p["id"] != preset_id]
+        await _refresh_settings(query)
+
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка текстовых сообщений."""
-    global _waiting_for_size, _waiting_for_scale_in, _waiting_for_apr_hard, _waiting_for_neg_hours, _waiting_for_price_pct
+    global _waiting_for_size, _waiting_for_scale_in, _waiting_for_apr_hard, _waiting_for_neg_hours, _waiting_for_price_pct, _waiting_for_preset_name
 
     text = update.message.text.strip()
 
@@ -1344,6 +1451,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ Закрытие при падении цены: <code>{val:.0f}%</code>", parse_mode=ParseMode.HTML)
         except ValueError:
             await update.message.reply_text(MSG["enter_number_error"], parse_mode=ParseMode.HTML)
+
+    # Ввод названия пресета
+    elif _waiting_for_preset_name:
+        _waiting_for_preset_name = False
+        name = text.strip()[:50]  # ограничиваем длину
+        if name:
+            data_json = json.dumps(_current_settings_as_dict())
+            preset_id = await save_preset(name, data_json)
+            _presets.append({"id": preset_id, "name": name, "data": data_json})
+            await update.message.reply_text(
+                MSG["preset_saved"].format(name=name),
+                parse_mode=ParseMode.HTML,
+            )
+        return
 
     # Ввод суммы для scale_in
     elif _waiting_for_scale_in is not None:

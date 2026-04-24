@@ -13,6 +13,7 @@ def find_pair_opportunities(
     enabled_exchanges: set[str] | None = None,
     min_pair_apr: float | None = None,
     min_volume_usd: float | None = None,
+    blacklist: set[str] | None = None,
 ) -> list[dict]:
     """
     Ищет лучшие дельта-нейтральные пары среди ВСЕХ комбинаций включённых бирж.
@@ -50,6 +51,10 @@ def find_pair_opportunities(
         if len(symbol) < 2 or not any(c.isalpha() for c in symbol):
             continue
 
+        # Блэклист
+        if blacklist and symbol in blacklist:
+            continue
+
         # Перебираем все пары бирж для этого символа
         exchange_list = list(rates_by_exchange.keys())
         for i in range(len(exchange_list)):
@@ -79,6 +84,13 @@ def find_pair_opportunities(
                 if net_apr < min_pair_apr:
                     continue
 
+                price_a = rate_a.mark_price
+                price_b = rate_b.mark_price
+                price_spread_pct = None
+                if price_a > 0 and price_b > 0:
+                    avg = (price_a + price_b) / 2
+                    price_spread_pct = round(abs(price_a - price_b) / avg * 100, 3)
+
                 opportunities.append({
                     "symbol": symbol,
                     "exchange_a": exch_a,
@@ -88,7 +100,8 @@ def find_pair_opportunities(
                     "apr_a": rate_a.apr,
                     "apr_b": rate_b.apr,
                     "net_apr": round(net_apr, 1),
-                    "mark_price": rate_a.mark_price or rate_b.mark_price,
+                    "mark_price": price_a or price_b,
+                    "price_spread_pct": price_spread_pct,
                 })
 
     opportunities.sort(key=lambda x: x["net_apr"], reverse=True)

@@ -61,11 +61,22 @@ async def send_pair_signal(opp: dict, size_usd: float = 0) -> None:
             return f" ⏱ {hours:.0f}ч"
         return f" ⏱ {hours / 24:.1f}д"
 
+    # Спред цен между биржами и время окупаемости
+    price_spread_pct = opp.get("price_spread_pct")
+    spread_lines = ""
+    if price_spread_pct is not None and price_spread_pct > 0:
+        roundtrip = price_spread_pct * 2
+        spread_lines = f"\n{MSG['signal_price_spread'].format(spread=price_spread_pct, roundtrip=roundtrip)}"
+        if net_apr > 0:
+            breakeven_days = roundtrip / (net_apr / 365)
+            spread_lines += f"\n{MSG['signal_breakeven'].format(days=breakeven_days)}"
+
     text = (
         f"🔀 <b>{esc(symbol)}</b> — {esc(exch_a)} × {esc(exch_b)}\n\n"
         f"{esc(exch_a)} ({dir_a_str}): <code>{eff_a:+.1f}%</code>\n"
         f"{esc(exch_b)} ({dir_b_str}): <code>{eff_b:+.1f}%</code>\n"
-        f"{MSG['signal_net_apr']}: ~{net_apr:.1f}% APR{_pair_streak_str(pair_streak)}\n\n"
+        f"{MSG['signal_net_apr']}: ~{net_apr:.1f}% APR{_pair_streak_str(pair_streak)}"
+        f"{spread_lines}\n\n"
         f"💸 {esc(exch_a)}: {fee_a} {MSG['signal_fee']} | {esc(exch_b)}: {fee_b}"
     )
 
@@ -74,7 +85,7 @@ async def send_pair_signal(opp: dict, size_usd: float = 0) -> None:
             MSG["btn_open_pair"],
             callback_data=f"open_pair:{exch_a}:{exch_b}:{symbol}:{dir_a}:{dir_b}:{net_apr:.1f}"
         ),
-        InlineKeyboardButton(MSG["btn_skip"], callback_data="skip"),
+        InlineKeyboardButton(MSG["btn_blacklist"], callback_data=f"blacklist_add:{symbol}"),
     ]])
 
     await bot.send_message(

@@ -50,6 +50,18 @@ async def init_db():
                 value TEXT NOT NULL
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS blacklist (
+                symbol TEXT PRIMARY KEY
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS presets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                data TEXT NOT NULL
+            )
+        """)
         await db.commit()
 
 
@@ -258,6 +270,44 @@ async def count_closed_pairs() -> int:
         """) as cur:
             row = await cur.fetchone()
             return row[0] if row else 0
+
+
+async def add_to_blacklist(symbol: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR IGNORE INTO blacklist (symbol) VALUES (?)", (symbol.upper(),))
+        await db.commit()
+
+
+async def remove_from_blacklist(symbol: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM blacklist WHERE symbol = ?", (symbol.upper(),))
+        await db.commit()
+
+
+async def get_blacklist() -> list[str]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT symbol FROM blacklist ORDER BY symbol") as cursor:
+            return [row[0] for row in await cursor.fetchall()]
+
+
+async def save_preset(name: str, data_json: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("INSERT INTO presets (name, data) VALUES (?, ?)", (name, data_json))
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def get_presets() -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT id, name, data FROM presets ORDER BY id") as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+
+async def delete_preset(preset_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM presets WHERE id = ?", (preset_id,))
+        await db.commit()
 
 
 async def get_closed_pairs(limit: int = 5, offset: int = 0) -> list[dict]:
