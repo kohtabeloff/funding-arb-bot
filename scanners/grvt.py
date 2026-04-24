@@ -82,13 +82,11 @@ class GRVTScanner(BaseScanner):
 
                     # funding_rate на GRVT — уже в % за период
                     # (например 0.01 = 0.01% за 8ч, а не 1%)
-                    funding_rate_pct = float(
+                    funding_rate_str = (
                         result.get("funding_rate_8h_curr")
                         or result.get("funding_rate")
-                        or 0
                     )
-                    if funding_rate_pct == 0:
-                        continue
+                    funding_rate_pct = float(funding_rate_str) if funding_rate_str is not None else 0.0
 
                     interval_hours = instruments_map.get(instrument, 8)
 
