@@ -827,9 +827,9 @@ def _build_settings() -> tuple:
     prot_desc = ""
     if _protection_enabled:
         prot_desc = (
-            f"\n\n🛡 Защита: APR &lt;{_neg_apr_hard_close:.0f}% / "
-            f"минус-фандинг &gt;{_neg_apr_hours:.0f}ч / "
-            f"цена &gt;{_price_close_pct:.0f}%"
+            f"\n\n🛡 Защита: APR ниже <code>{_neg_apr_hard_close:.0f}%</code> / "
+            f"минус-фандинг <code>{_neg_apr_hours:.0f}ч</code> / "
+            f"цена −<code>{_price_close_pct:.0f}%</code>"
         )
     else:
         prot_desc = "\n\n⚠️ Защита выключена — автозакрытие не работает"
