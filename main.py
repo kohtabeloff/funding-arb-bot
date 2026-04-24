@@ -1190,6 +1190,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             size = float(value)
             if target == "global":
+                global _global_position_size
                 _global_position_size = size
             else:
                 _exchange_sizes[target] = size
