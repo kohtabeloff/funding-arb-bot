@@ -391,6 +391,30 @@ This helps you prioritize pairs with a proven track record. Short dips into nega
 
 ---
 
+## Updating to the latest version
+
+Connect to your server via SSH and run three commands:
+
+```bash
+cd ~/funding-arb-bot
+git pull origin main
+sudo systemctl restart funding-arb-bot
+```
+
+Check that the bot started:
+```bash
+sudo systemctl status funding-arb-bot
+```
+
+Watch live logs:
+```bash
+sudo journalctl -u funding-arb-bot -f
+```
+
+> 💡 Your database and `.env` file are not affected by updates — all positions, settings, and API keys are preserved.
+
+---
+
 ## Tips
 
 **Start small.** Open your first positions with minimum amounts — $10–15 per leg. Make sure the bot correctly opens and closes positions, monitoring works, and notifications arrive. Only then increase position sizes.
