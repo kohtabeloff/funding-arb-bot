@@ -327,12 +327,42 @@ To increase the size of an already open pair:
 2. Find the pair and press **➕ Add**
 3. Enter the amount in USD — the bot will add to both legs proportionally
 
+### Price spread in signals
+
+Every signal now shows the price difference between the two exchanges and how many days you need to hold the position to break even after accounting for entry and exit costs:
+
+```
+💱 Price spread: ~0.05% (round-trip: ~0.10%)
+⏳ Breakeven: ~1.2d
+```
+
+This helps you evaluate a pair's real attractiveness — not just by APR, but factoring in the cost of opening.
+
+### Token blacklist
+
+Every signal has a **🚫 Blacklist** button. Tap it — and that token stops appearing in signals.
+
+Manage the list in **⚙️ Settings → Blacklist**: see all blocked tokens, remove them with one tap.
+
+### Settings presets
+
+Save any combination of settings under a name and switch between them instantly.
+
+1. Configure everything as needed
+2. In **⚙️ Settings → Presets** tap **💾 Save current**
+3. Enter a name, e.g. `Conservative` or `HL+BP only`
+4. To apply — tap **▶** next to the preset
+
+A preset saves: enabled exchanges, position sizes, protection settings.
+
 ### Settings
 
 In **⚙️ Settings** you can:
 - Enable and disable individual exchanges
 - Choose position size mode: **global** (same size for all) or **per-exchange** (separate size for each)
 - Configure automatic protection parameters (see below)
+- Manage the token blacklist
+- Create and apply settings presets
 
 ### Automatic protection
 
