@@ -32,7 +32,7 @@ from db.database import (
     init_db, save_funding_snapshot,
     get_open_pairs, get_positions_by_pair, get_closed_pairs, count_closed_pairs,
     get_position_by_id, mark_position_closed,
-    save_setting, load_setting, get_avg_rate_since, get_avg_rate_between,
+    save_setting, load_setting, get_avg_rate_since, get_avg_rate_between, get_avg_apr_since,
     add_to_blacklist, remove_from_blacklist, get_blacklist,
     save_preset, get_presets, delete_preset,
 )
@@ -237,6 +237,15 @@ def get_pair_streak_hours(exch_a: str, exch_b: str, symbol: str) -> float | None
     if not streak or streak.get("positive_since") is None:
         return None
     return (time.time() - streak["positive_since"]) / 3600
+
+
+def get_pair_streak_since(exch_a: str, exch_b: str, symbol: str) -> float | None:
+    """Возвращает timestamp начала текущего стрика. None если данных нет."""
+    key = _pair_key(exch_a, exch_b, symbol)
+    streak = _funding_streak.get(key)
+    if not streak or streak.get("positive_since") is None:
+        return None
+    return streak["positive_since"]
 
 
 # ─── Сканирование ────────────────────────────────────────────────────────────
@@ -561,9 +570,37 @@ async def _auto_close_pair(pair_id: str, symbol: str, legs: list, reason: str):
 
 # ─── Поиск новых возможностей ────────────────────────────────────────────────
 
-def _enrich_opp_with_streaks(opp: dict) -> dict:
-    """Добавляет в opp количество часов положительного Net APR для пары."""
-    opp["pair_streak"] = get_pair_streak_hours(opp["exchange_a"], opp["exchange_b"], opp["symbol"])
+async def _enrich_opp_with_streaks(opp: dict) -> dict:
+    """Добавляет в opp стрик и средние нетто APR за 24ч и за период стрика."""
+    exch_a, exch_b, symbol = opp["exchange_a"], opp["exchange_b"], opp["symbol"]
+    dir_a, dir_b = opp["dir_a"], opp["dir_b"]
+
+    opp["pair_streak"] = get_pair_streak_hours(exch_a, exch_b, symbol)
+
+    def _net_apr(avg_a, avg_b):
+        if avg_a is None or avg_b is None:
+            return None
+        eff_a = avg_a if dir_a == "SHORT" else -avg_a
+        eff_b = avg_b if dir_b == "SHORT" else -avg_b
+        return round(eff_a + eff_b, 1)
+
+    since_24h = time.time() - 86400
+    avg_a_24h, avg_b_24h = await asyncio.gather(
+        get_avg_apr_since(exch_a, symbol, since_24h),
+        get_avg_apr_since(exch_b, symbol, since_24h),
+    )
+    opp["avg_apr_24h"] = _net_apr(avg_a_24h, avg_b_24h)
+
+    streak_since = get_pair_streak_since(exch_a, exch_b, symbol)
+    if streak_since:
+        avg_a_streak, avg_b_streak = await asyncio.gather(
+            get_avg_apr_since(exch_a, symbol, streak_since),
+            get_avg_apr_since(exch_b, symbol, streak_since),
+        )
+        opp["streak_avg_apr"] = _net_apr(avg_a_streak, avg_b_streak)
+    else:
+        opp["streak_avg_apr"] = None
+
     return opp
 
 
@@ -586,7 +623,7 @@ async def _scan_opportunities(exchange_rates: dict):
         if not should_send_signal(signal_key, opp["net_apr"]):
             continue
 
-        _enrich_opp_with_streaks(opp)
+        await _enrich_opp_with_streaks(opp)
         await send_pair_signal(opp)
         _sent_signals[signal_key] = (opp["net_apr"], time.time())
 
@@ -684,13 +721,26 @@ async def show_positions(update: Update):
 
             earned_str = f"<code>${total_earned:.4f}</code> ({MSG['earned_estimate']})" if has_earnings else f"<i>{MSG['no_data']}</i>"
 
+            # Считаем текущий спред по mark_price
+            rate_leg0 = rates_map.get(f"{legs[0]['exchange']}:{symbol}")
+            rate_leg1 = rates_map.get(f"{legs[1]['exchange']}:{symbol}")
+            spread_lines = ""
+            if rate_leg0 and rate_leg1 and rate_leg0.mark_price > 0 and rate_leg1.mark_price > 0:
+                avg_price = (rate_leg0.mark_price + rate_leg1.mark_price) / 2
+                spread_pct = abs(rate_leg0.mark_price - rate_leg1.mark_price) / avg_price * 100
+                spread_lines = f"\n{MSG['signal_price_spread'].format(spread=spread_pct, roundtrip=spread_pct)}"
+                if net_apr > 0:
+                    breakeven_days = spread_pct / (net_apr / 365)
+                    spread_lines += f"\n{MSG['signal_breakeven'].format(days=breakeven_days)}"
+
             exch_names = " × ".join(l["exchange"] for l in legs)
             text = (
                 f"🔀 <b>{symbol}</b> — {exch_names} {apr_status}\n\n"
                 + "\n".join(lines) + "\n"
                 f"{MSG['size_label']}: <code>${total_usd:.0f}</code> (по <code>${legs[0]['position_size_usd']:.0f}</code> {MSG['per_leg']})\n"
                 f"{MSG['opened_label']}: <code>{opened_ago:.1f}{MSG['h_ago']}</code>\n"
-                f"  {MSG['net_apr_label']}: <code>{net_apr:+.1f}%</code>\n"
+                f"  {MSG['net_apr_label']}: <code>{net_apr:+.1f}%</code>"
+                f"{spread_lines}\n"
                 f"{MSG['earned_label']}: {earned_str}"
             )
             keyboard = InlineKeyboardMarkup([[
@@ -1046,7 +1096,7 @@ async def scan_manual(update: Update):
     all_positive = find_pair_opportunities(exchange_rates, _enabled_exchanges, min_pair_apr=0, blacklist=bl)
     _update_pair_net_streaks(all_positive)
     for opp in opps:
-        _enrich_opp_with_streaks(opp)
+        await _enrich_opp_with_streaks(opp)
         await send_pair_signal(opp)
 
     # Итоговое сообщение
