@@ -624,7 +624,8 @@ async def _scan_opportunities(exchange_rates: dict):
             continue
 
         await _enrich_opp_with_streaks(opp)
-        await send_pair_signal(opp)
+        total_size = get_position_size(opp["exchange_a"]) + get_position_size(opp["exchange_b"])
+        await send_pair_signal(opp, size_usd=total_size)
         _sent_signals[signal_key] = (opp["net_apr"], time.time())
 
 
@@ -721,6 +722,31 @@ async def show_positions(update: Update):
 
             earned_str = f"<code>${total_earned:.4f}</code> ({MSG['earned_estimate']})" if has_earnings else f"<i>{MSG['no_data']}</i>"
 
+            # Исторический нетто APR
+            def _hist_net_apr(avg_aprs):
+                vals = []
+                for leg, avg in zip(legs, avg_aprs):
+                    if avg is None:
+                        return None
+                    vals.append(avg if leg["direction"] == "SHORT" else -avg)
+                return round(sum(vals), 1)
+
+            since_24h = time.time() - 86400
+            avg_aprs_24h = await asyncio.gather(*[
+                get_avg_apr_since(leg["exchange"], symbol, since_24h) for leg in legs
+            ])
+            avg_aprs_open = await asyncio.gather(*[
+                get_avg_apr_since(leg["exchange"], symbol, legs[0]["opened_at"]) for leg in legs
+            ])
+            net_apr_24h = _hist_net_apr(avg_aprs_24h)
+            net_apr_open = _hist_net_apr(avg_aprs_open)
+
+            apr_history_lines = ""
+            if net_apr_24h is not None:
+                apr_history_lines += f"\n📊 Среднее за 24ч: <code>{net_apr_24h:+.1f}%</code>"
+            if net_apr_open is not None:
+                apr_history_lines += f"\n📈 Среднее за позицию ({opened_ago:.0f}ч): <code>{net_apr_open:+.1f}%</code>"
+
             # Считаем текущий спред по mark_price
             rate_leg0 = rates_map.get(f"{legs[0]['exchange']}:{symbol}")
             rate_leg1 = rates_map.get(f"{legs[1]['exchange']}:{symbol}")
@@ -728,7 +754,8 @@ async def show_positions(update: Update):
             if rate_leg0 and rate_leg1 and rate_leg0.mark_price > 0 and rate_leg1.mark_price > 0:
                 avg_price = (rate_leg0.mark_price + rate_leg1.mark_price) / 2
                 spread_pct = abs(rate_leg0.mark_price - rate_leg1.mark_price) / avg_price * 100
-                spread_lines = f"\n{MSG['signal_price_spread'].format(spread=spread_pct, roundtrip=spread_pct)}"
+                spread_cost_str = f"(~${total_usd * spread_pct / 100:.2f})"
+                spread_lines = f"\n💱 Спред цен: ~{spread_pct:.2f}% {spread_cost_str}"
                 if net_apr > 0:
                     breakeven_days = spread_pct / (net_apr / 365)
                     spread_lines += f"\n{MSG['signal_breakeven'].format(days=breakeven_days)}"
@@ -740,6 +767,7 @@ async def show_positions(update: Update):
                 f"{MSG['size_label']}: <code>${total_usd:.0f}</code> (по <code>${legs[0]['position_size_usd']:.0f}</code> {MSG['per_leg']})\n"
                 f"{MSG['opened_label']}: <code>{opened_ago:.1f}{MSG['h_ago']}</code>\n"
                 f"  {MSG['net_apr_label']}: <code>{net_apr:+.1f}%</code>"
+                f"{apr_history_lines}"
                 f"{spread_lines}\n"
                 f"{MSG['earned_label']}: {earned_str}"
             )
@@ -1097,7 +1125,8 @@ async def scan_manual(update: Update):
     _update_pair_net_streaks(all_positive)
     for opp in opps:
         await _enrich_opp_with_streaks(opp)
-        await send_pair_signal(opp)
+        total_size = get_position_size(opp["exchange_a"]) + get_position_size(opp["exchange_b"])
+        await send_pair_signal(opp, size_usd=total_size)
 
     # Итоговое сообщение
     min_apr = opps[-1]["net_apr"]

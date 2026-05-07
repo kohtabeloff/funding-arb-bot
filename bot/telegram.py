@@ -66,7 +66,8 @@ async def send_pair_signal(opp: dict, size_usd: float = 0) -> None:
     spread_lines = ""
     if price_spread_pct is not None and price_spread_pct > 0:
         roundtrip = price_spread_pct * 2
-        spread_lines = f"\n{MSG['signal_price_spread'].format(spread=price_spread_pct, roundtrip=roundtrip)}"
+        spread_cost_str = f" (~${size_usd * roundtrip / 100:.2f})" if size_usd > 0 else ""
+        spread_lines = f"\n{MSG['signal_price_spread'].format(spread=price_spread_pct, roundtrip=roundtrip)}{spread_cost_str}"
         if net_apr > 0:
             breakeven_days = roundtrip / (net_apr / 365)
             spread_lines += f"\n{MSG['signal_breakeven'].format(days=breakeven_days)}"
