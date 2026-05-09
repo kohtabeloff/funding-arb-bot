@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 
-from core.exchanges.base import BaseExchangeExecutor
+from core.exchanges.base import BaseExchangeExecutor, ExchangeStatus
 from db.database import save_pair, close_pair as db_close_pair, scale_pair_db_generic
 
 logger = logging.getLogger(__name__)
@@ -86,9 +86,7 @@ async def open_pair(
     is_long_b = (dir_b == "LONG")
 
     logger.info(
-        f"Открываем пару {symbol}: "
-        f"{exchange_a_name} {'лонг' if is_long_a else 'шорт'}, "
-        f"{exchange_b_name} {'лонг' if is_long_b else 'шорт'}, ${size_usd}"
+        f"[open_pair] START | {symbol} | {exchange_a_name} {dir_a} + {exchange_b_name} {dir_b} | ${size_usd}"
     )
 
     # Проверяем балансы параллельно
@@ -111,6 +109,7 @@ async def open_pair(
                 )
 
     # Открываем обе ноги одновременно — минимизируем ценовой лаг между ногами
+    logger.info(f"[open_pair] ORDER_SENT | {symbol} | {exchange_a_name} + {exchange_b_name}")
     result_a, result_b = await asyncio.gather(
         exec_a.market_open(symbol, is_long_a, size_usd),
         exec_b.market_open(symbol, is_long_b, size_usd),
@@ -119,17 +118,22 @@ async def open_pair(
 
     a_ok = not isinstance(result_a, Exception)
     b_ok = not isinstance(result_b, Exception)
+    logger.info(
+        f"[open_pair] ORDER_RESULT | {symbol} | "
+        f"{exchange_a_name}: {'OK price={:.4f}'.format(result_a.get('price', 0)) if a_ok else 'FAIL ' + str(result_a)} | "
+        f"{exchange_b_name}: {'OK price={:.4f}'.format(result_b.get('price', 0)) if b_ok else 'FAIL ' + str(result_b)}"
+    )
 
     # Если одна нога упала — откатываем вторую
     if a_ok and not b_ok:
-        logger.error(f"{exchange_b_name} не открылся: {result_b} — закрываем {exchange_a_name}")
+        logger.error(f"[open_pair] ROLLBACK | {symbol} | {exchange_b_name} упал, откатываем {exchange_a_name}")
         await _rollback_leg(exec_a, symbol, result_a, is_long_a, exchange_a_name, exchange_b_name, result_b)
         await _close_executor(exec_a)
         await _close_executor(exec_b)
         raise RuntimeError(f"{exchange_b_name} ошибка: {result_b}\n{exchange_a_name} закрыт автоматически.")
 
     if not a_ok and b_ok:
-        logger.error(f"{exchange_a_name} не открылся: {result_a} — закрываем {exchange_b_name}")
+        logger.error(f"[open_pair] ROLLBACK | {symbol} | {exchange_a_name} упал, откатываем {exchange_b_name}")
         await _rollback_leg(exec_b, symbol, result_b, is_long_b, exchange_b_name, exchange_a_name, result_a)
         await _close_executor(exec_a)
         await _close_executor(exec_b)
@@ -181,7 +185,7 @@ async def open_pair(
 
     await _close_executor(exec_a)
     await _close_executor(exec_b)
-    logger.info(f"Пара открыта: {pair_id}")
+    logger.info(f"[open_pair] DB_SAVED | {pair_id} | {symbol} | DONE")
     return {
         "pair_id": pair_id,
         "symbol": symbol,
@@ -193,27 +197,39 @@ async def open_pair(
 async def preflight_open(exchange_a_name: str, exchange_b_name: str) -> list[str]:
     """
     Проверяет перед открытием, что обе биржи отвечают.
+    Сначала пробует get_balance(), при None (не поддерживается) — get_positions().
     Возвращает список проблем (пустой = всё ок).
     """
     problems = []
     exchanges = [exchange_a_name, exchange_b_name]
-    checks = await asyncio.gather(*[
+    balances = await asyncio.gather(*[
         get_executor(name).get_balance()
         for name in exchanges
     ], return_exceptions=True)
 
-    for name, result in zip(exchanges, checks):
-        if isinstance(result, Exception):
-            problems.append(f"{name}: API не отвечает ({result})")
-        elif result is None:
-            problems.append(f"{name}: не удалось получить баланс (возможно ошибка авторизации)")
+    for name, balance in zip(exchanges, balances):
+        if isinstance(balance, Exception):
+            problems.append(f"{name}: API не отвечает ({balance})")
+            continue
+        if balance is not None:
+            continue  # баланс получен — биржа отвечает
+        # balance is None — биржа не поддерживает get_balance, проверяем через get_positions
+        try:
+            pos_result = await get_executor(name).get_positions()
+            if pos_result.status == ExchangeStatus.API_ERROR:
+                problems.append(f"{name}: не удалось получить позиции (возможно ошибка авторизации)")
+        except Exception as e:
+            problems.append(f"{name}: API не отвечает ({e})")
 
     return problems
 
 
 async def preflight_close(symbol: str, legs: list[dict]) -> list[str]:
     """
-    Проверяет перед закрытием, что все биржи отвечают и позиции реально существуют.
+    Проверяет перед закрытием, что все биржи отвечают.
+    Проверяем только доступность API — не наличие конкретной позиции,
+    потому что если нога уже исчезла с биржи, market_close это обработает
+    корректно (вернёт успех), а блокировать закрытие второй ноги нельзя.
     Возвращает список проблем (пустой = всё ок).
     """
     problems = []
@@ -226,13 +242,8 @@ async def preflight_close(symbol: str, legs: list[dict]) -> list[str]:
         exch = leg["exchange"]
         if isinstance(result, Exception):
             problems.append(f"{exch}: API не отвечает ({result})")
-            continue
-        if result is None:
-            problems.append(f"{exch}: не удалось получить позиции (возможно ошибка авторизации)")
-            continue
-        found = any(p["symbol"].upper() == symbol.upper() for p in result)
-        if not found:
-            problems.append(f"{exch}: позиция {symbol} не найдена на бирже")
+        elif result.status == ExchangeStatus.API_ERROR:
+            problems.append(f"{exch}: не удалось получить позиции — {result.error or 'ошибка авторизации'}")
 
     return problems
 
@@ -241,6 +252,9 @@ async def close_pair(pair_id: str, symbol: str, legs: list[dict]) -> dict:
     """
     Закрывает обе ноги пары. legs — список позиций из БД.
     """
+    exch_names = " + ".join(l["exchange"] for l in legs)
+    logger.info(f"[close_pair] START | {pair_id} | {symbol} | {exch_names}")
+
     executors = {}
     tasks = []
 
@@ -251,19 +265,38 @@ async def close_pair(pair_id: str, symbol: str, legs: list[dict]) -> dict:
         was_long = (leg["direction"] == "LONG")
         tasks.append(executor.market_close(symbol, leg["size"], was_long))
 
+    logger.info(f"[close_pair] ORDER_SENT | {pair_id} | {symbol} | {exch_names}")
     results = list(await asyncio.gather(*tasks, return_exceptions=True))
 
     # Ретраи для упавших ног — сразу, без ожидания следующего скана
     RETRY_ATTEMPTS = 3
     RETRY_DELAY = 3  # секунд между попытками
 
+    def _is_failed(r) -> bool:
+        """True если нога не закрылась и требует ретрая."""
+        if isinstance(r, Exception):
+            return True
+        return r.status in (ExchangeStatus.API_ERROR, ExchangeStatus.UNKNOWN)
+
+    def _result_label(r) -> str:
+        if isinstance(r, Exception):
+            return f"FAIL {r}"
+        if r.status == ExchangeStatus.OK:
+            return f"OK price={r.price:.4f}"
+        if r.status == ExchangeStatus.ALREADY_CLOSED:
+            return "ALREADY_CLOSED"
+        return f"FAIL [{r.status.value}] {r.error}"
+
+    for leg, result in zip(legs, results):
+        logger.info(f"[close_pair] ORDER_RESULT | {pair_id} | {symbol} | {leg['exchange']}: {_result_label(result)}")
+
     for attempt in range(RETRY_ATTEMPTS):
-        failed_indices = [i for i, r in enumerate(results) if isinstance(r, Exception)]
+        failed_indices = [i for i, r in enumerate(results) if _is_failed(r)]
         if not failed_indices:
             break
         logger.warning(
-            f"close_pair {pair_id}: {len(failed_indices)} ног не закрылось, "
-            f"retry {attempt + 1}/{RETRY_ATTEMPTS} через {RETRY_DELAY}с..."
+            f"[close_pair] RETRY {attempt + 1}/{RETRY_ATTEMPTS} | {pair_id} | {symbol} | "
+            f"не закрылось: {[legs[i]['exchange'] for i in failed_indices]}"
         )
         await asyncio.sleep(RETRY_DELAY)
         retry_tasks = [
@@ -280,19 +313,21 @@ async def close_pair(pair_id: str, symbol: str, legs: list[dict]) -> dict:
     leg_pnl: dict = {}
     errors = []
     for leg, result in zip(legs, results):
-        if isinstance(result, Exception):
-            errors.append(f"{leg['exchange']}: {result}")
+        if _is_failed(result):
+            err = str(result) if isinstance(result, Exception) else f"[{result.status.value}] {result.error}"
+            errors.append(f"{leg['exchange']}: {err}")
             continue
-        exit_price = result.get("price") or leg["entry_price"]
+        # OK или ALREADY_CLOSED — считаем как успех
+        exit_price = result.price if result.price > 0 else leg["entry_price"]
         was_long = (leg["direction"] == "LONG")
         pnl = (exit_price - leg["entry_price"]) * leg["size"]
         if not was_long:
             pnl = -pnl
-        fees = result.get("fee") or (leg["position_size_usd"] * get_executor(leg["exchange"]).fee_rate * 2)
+        fees = result.fee if result.fee > 0 else (leg["position_size_usd"] * get_executor(leg["exchange"]).fee_rate * 2)
         leg_pnl[leg["id"]] = {
             "exit_price": exit_price,
             "pnl_price_usd": round(pnl, 6),
-            "fees_usd": round(fees, 6) if isinstance(fees, (int, float)) else 0.0,
+            "fees_usd": round(fees, 6),
         }
 
     for executor in executors.values():
@@ -303,12 +338,13 @@ async def close_pair(pair_id: str, symbol: str, legs: list[dict]) -> dict:
     if leg_pnl:
         try:
             await db_close_pair(pair_id, leg_pnl)
+            logger.info(f"[close_pair] DB_SAVED | {pair_id} | {symbol} | ног записано: {len(leg_pnl)}")
         except Exception as db_err:
-            logger.error(f"Не удалось записать закрытие в БД: {db_err}")
+            logger.error(f"[close_pair] DB_ERROR | {pair_id} | {symbol} | {db_err}")
 
     if errors:
-        # Часть ног не закрылась — алерт
-        closed_names = [leg["exchange"] for leg, r in zip(legs, results) if not isinstance(r, Exception)]
+        closed_names = [leg["exchange"] for leg, r in zip(legs, results) if not _is_failed(r)]
+        logger.error(f"[close_pair] PARTIAL | {pair_id} | {symbol} | закрыты: {closed_names} | ошибки: {errors}")
         raise RuntimeError(
             f"Частичное закрытие пары {pair_id}!\n"
             f"✅ Закрыты: {', '.join(closed_names) if closed_names else 'нет'}\n"
@@ -316,7 +352,7 @@ async def close_pair(pair_id: str, symbol: str, legs: list[dict]) -> dict:
             "\n\n⚠️ Проверь позиции на биржах вручную!"
         )
 
-    logger.info(f"Пара закрыта: {pair_id}")
+    logger.info(f"[close_pair] DONE | {pair_id} | {symbol} | все ноги закрыты успешно")
     return {"pair_id": pair_id, "symbol": symbol}
 
 
@@ -345,10 +381,9 @@ async def scale_in_pair(pair_id: str, symbol: str, legs: list, add_size_usd: flo
                 exch_name = leg["exchange"]
                 executor = executors[exch_name]
                 is_long = (leg["direction"] == "LONG")
-                try:
-                    await executor.market_close(symbol, result["size"], is_long)
-                except Exception as e:
-                    logger.error(f"Не удалось откатить {exch_name} при scale_in: {e}")
+                close_res = await executor.market_close(symbol, result["size"], is_long)
+                if close_res.status not in (ExchangeStatus.OK, ExchangeStatus.ALREADY_CLOSED):
+                    logger.error(f"Не удалось откатить {exch_name} при scale_in: {close_res.error}")
         errors = [str(r) for i, r in enumerate(results) if isinstance(r, Exception)]
         for executor in executors.values():
             await _close_executor(executor)
@@ -385,11 +420,12 @@ async def _rollback_leg(
     failed_error,
 ):
     """Откатывает открытую ногу при сбое второй. Шлёт критичный алерт при неудаче."""
-    try:
-        await executor.market_close(symbol, open_result["size"], was_long)
+    close_res = await executor.market_close(symbol, open_result["size"], was_long)
+    if close_res.status in (ExchangeStatus.OK, ExchangeStatus.ALREADY_CLOSED):
         logger.info(f"{opened_exchange} автоматически закрыт после ошибки {failed_exchange}")
-    except Exception as e:
-        logger.error(f"Не удалось закрыть {opened_exchange} после ошибки {failed_exchange}: {e}")
+    else:
+        err_msg = close_res.error or close_res.status.value
+        logger.error(f"Не удалось закрыть {opened_exchange} после ошибки {failed_exchange}: {err_msg}")
         try:
             from bot.telegram import send_message
             await send_message(
@@ -397,7 +433,7 @@ async def _rollback_leg(
                 f"*{symbol}* — {opened_exchange} открылся, {failed_exchange} упал.\n"
                 f"Автозакрытие {opened_exchange} тоже провалилось!\n\n"
                 f"❌ {failed_exchange}: `{failed_error}`\n"
-                f"❌ Автозакрытие: `{e}`\n\n"
+                f"❌ Автозакрытие: `{err_msg}`\n\n"
                 f"⚠️ *Немедленно закрой {symbol} на {opened_exchange} вручную!*"
             )
         except Exception:

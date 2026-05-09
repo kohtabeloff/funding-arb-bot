@@ -3,10 +3,11 @@ GRVT (Gravity) executor — использует grvt-pysdk (async).
 Аутентификация: API key + EIP-712 подпись ордеров через ETH private key.
 SDK: pip install grvt-pysdk
 """
+import asyncio
 import logging
 from decimal import Decimal
 
-from .base import BaseExchangeExecutor
+from .base import BaseExchangeExecutor, CloseResult, ExchangeStatus, PositionResult
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +50,10 @@ class GRVTExecutor(BaseExchangeExecutor):
         return f"{symbol.upper()}_USDT_Perp"
 
     async def _get_size_precision(self, instrument: str) -> int:
-        """Возвращает кол-во знаков после запятой для округления размера ордера.
-        Берёт min_size инструмента и считает количество значащих десятичных знаков."""
         api = await self._get_api()
         market = api.markets.get(instrument, {})
         min_size = market.get("min_size")
         if min_size:
-            # min_size=0.1 → 1, min_size=0.01 → 2, min_size=1 → 0
             min_size_str = str(min_size)
             if '.' in min_size_str:
                 return len(min_size_str.rstrip('0').split('.')[1])
@@ -77,55 +75,43 @@ class GRVTExecutor(BaseExchangeExecutor):
 
         price = await self.get_mark_price(symbol)
         size = size_usd / price
-
-        # Округляем до точности инструмента (base_decimals), иначе подпись не совпадёт
         decimals = await self._get_size_precision(instrument)
         size = round(size, decimals)
-
         side = "buy" if is_long else "sell"
 
         logger.info(f"GRVT: {'лонг' if is_long else 'шорт'} {symbol}, ${size_usd}, size={size:.{decimals}f}")
 
         order = await api.create_order(
-            symbol=instrument,
-            order_type="market",
-            side=side,
-            amount=Decimal(str(size)),
+            symbol=instrument, order_type="market", side=side, amount=Decimal(str(size)),
         )
 
         if not order:
-            import asyncio as _asyncio
-            await _asyncio.sleep(2)
-            # Сначала проверяем — вдруг ордер всё же исполнился (пустой ответ != незаполнено)
-            real_size = await self._get_position_size(symbol)
-            if real_size is not None and abs(real_size) > 0:
-                logger.warning(f"GRVT: ордер {symbol} исполнен, но ответ был пустым (обнаружено через positions)")
+            await asyncio.sleep(2)
+            pos_result = await self.get_positions()
+            if pos_result.status == ExchangeStatus.OK:
+                found = next((p for p in pos_result.positions if p["symbol"] == symbol.upper()), None)
+                if found and abs(found["quantity"]) > 0:
+                    logger.warning(f"GRVT: ордер {symbol} исполнен, но ответ был пустым")
+                    size = abs(found["quantity"])
+                    order = {"filled": size, "amount": size, "average": price, "price": price}
+                else:
+                    logger.warning(f"GRVT: пустой ответ при открытии {symbol}, сброс сессии и retry...")
+                    self._api = None
+                    self._markets_loaded = False
+                    api = await self._get_api()
+                    order = await api.create_order(
+                        symbol=instrument, order_type="market", side=side, amount=Decimal(str(size)),
+                    )
+                    if not order:
+                        raise RuntimeError(f"GRVT: ордер {symbol} отклонён биржей (пустой ответ от API)")
             else:
-                # Позиции нет — сессия, вероятно, протухла. Сбрасываем SDK и пробуем ещё раз.
-                logger.warning(f"GRVT: пустой ответ при открытии {symbol}, сброс сессии и retry...")
-                self._api = None
-                self._markets_loaded = False
-                api = await self._get_api()
-                order = await api.create_order(
-                    symbol=instrument,
-                    order_type="market",
-                    side=side,
-                    amount=Decimal(str(size)),
-                )
-                if not order:
-                    raise RuntimeError(f"GRVT: ордер {symbol} отклонён биржей (пустой ответ от API)")
+                raise RuntimeError(f"GRVT: не удалось проверить статус ордера {symbol}: {pos_result.error}")
 
-        # Парсим результат
         filled_size = float(order.get("filled") or order.get("amount") or size) if order else size
         filled_price = float(order.get("average") or order.get("price") or price) if order else price
 
         logger.info(f"GRVT: ордер исполнен {symbol}, size={filled_size}, price={filled_price}")
-        return {
-            "order_id": order.get("id"),
-            "size": filled_size,
-            "size_usd": size_usd,
-            "price": filled_price,
-        }
+        return {"order_id": order.get("id") if order else None, "size": filled_size, "size_usd": size_usd, "price": filled_price}
 
     async def market_open_by_qty(self, symbol: str, is_long: bool, quantity: float) -> dict:
         """Открывает позицию по точному количеству (для синхронизации ног)."""
@@ -133,162 +119,138 @@ class GRVTExecutor(BaseExchangeExecutor):
         instrument = self._to_instrument(symbol)
         price = await self.get_mark_price(symbol)
         side = "buy" if is_long else "sell"
-
-        # Округляем до точности инструмента (base_decimals), иначе подпись не совпадёт
         decimals = await self._get_size_precision(instrument)
         quantity = round(quantity, decimals)
 
         logger.info(f"GRVT: {'лонг' if is_long else 'шорт'} {symbol}, qty={quantity:.{decimals}f}")
 
         order = await api.create_order(
-            symbol=instrument,
-            order_type="market",
-            side=side,
-            amount=Decimal(str(quantity)),
+            symbol=instrument, order_type="market", side=side, amount=Decimal(str(quantity)),
         )
 
         if not order:
-            import asyncio as _asyncio
-            await _asyncio.sleep(2)
-            real_size = await self._get_position_size(symbol)
-            if real_size is not None and abs(real_size) > 0:
-                logger.warning(f"GRVT: ордер {symbol} qty исполнен, но ответ был пустым")
+            await asyncio.sleep(2)
+            pos_result = await self.get_positions()
+            if pos_result.status == ExchangeStatus.OK:
+                found = next((p for p in pos_result.positions if p["symbol"] == symbol.upper()), None)
+                if found and abs(found["quantity"]) > 0:
+                    logger.warning(f"GRVT: ордер qty {symbol} исполнен, но ответ был пустым")
+                    order = {"filled": quantity, "amount": quantity, "average": price, "price": price}
+                else:
+                    logger.warning(f"GRVT: пустой ответ qty {symbol}, сброс сессии и retry...")
+                    self._api = None
+                    self._markets_loaded = False
+                    api = await self._get_api()
+                    order = await api.create_order(
+                        symbol=instrument, order_type="market", side=side, amount=Decimal(str(quantity)),
+                    )
+                    if not order:
+                        raise RuntimeError(f"GRVT: ордер {symbol} отклонён биржей (пустой ответ от API)")
             else:
-                logger.warning(f"GRVT: пустой ответ qty {symbol}, сброс сессии и retry...")
-                self._api = None
-                self._markets_loaded = False
-                api = await self._get_api()
-                order = await api.create_order(
-                    symbol=instrument,
-                    order_type="market",
-                    side=side,
-                    amount=Decimal(str(quantity)),
-                )
-                if not order:
-                    raise RuntimeError(f"GRVT: ордер {symbol} отклонён биржей (пустой ответ от API)")
+                raise RuntimeError(f"GRVT: не удалось проверить статус ордера {symbol}: {pos_result.error}")
 
         filled_size = float(order.get("filled") or order.get("amount") or quantity) if order else quantity
         filled_price = float(order.get("average") or order.get("price") or price) if order else price
 
         logger.info(f"GRVT: ордер исполнен {symbol}, size={filled_size}, price={filled_price}")
-        return {
-            "order_id": order.get("id"),
-            "size": filled_size,
-            "size_usd": filled_size * filled_price,
-            "price": filled_price,
-        }
+        return {"order_id": order.get("id") if order else None, "size": filled_size, "size_usd": filled_size * filled_price, "price": filled_price}
 
-    async def market_close(self, symbol: str, size: float = 0, was_long: bool = True) -> dict:
-        api = await self._get_api()
-        instrument = self._to_instrument(symbol)
+    async def market_close(self, symbol: str, size: float = 0, was_long: bool = True) -> CloseResult:
+        try:
+            api = await self._get_api()
+            instrument = self._to_instrument(symbol)
+            price = await self.get_mark_price(symbol)
 
-        price = await self.get_mark_price(symbol)
+            pos_result = await self.get_positions()
+            if pos_result.status == ExchangeStatus.API_ERROR:
+                return CloseResult(status=ExchangeStatus.API_ERROR, error=pos_result.error)
+            if pos_result.status == ExchangeStatus.UNKNOWN:
+                return CloseResult(status=ExchangeStatus.UNKNOWN, error=pos_result.error)
 
-        # Проверяем реальный размер позиции на бирже
-        # None = ошибка связи/авторизации — нельзя считать закрытой, кидаем исключение
-        # 0 = позиция реально отсутствует на бирже — считаем закрытой
-        real_size = await self._get_position_size(symbol)
-        if real_size is None:
-            raise RuntimeError(f"GRVT: не удалось получить позиции для {symbol} — статус неизвестен, закрытие прервано")
-        if abs(real_size) == 0:
-            logger.info(f"GRVT: позиция {symbol} уже закрыта на бирже")
-            return {"symbol": symbol, "price": price, "fee": 0}
+            found = next((p for p in pos_result.positions if p["symbol"] == symbol.upper()), None)
+            real_size = abs(found["quantity"]) if found else 0
 
-        # Закрываем: если был лонг → sell, если шорт → buy
-        side = "sell" if was_long else "buy"
-        close_size = size if size > 0 else abs(real_size or 0)
+            if real_size == 0:
+                logger.info(f"GRVT: позиция {symbol} уже закрыта (подтверждено API)")
+                return CloseResult(status=ExchangeStatus.ALREADY_CLOSED, price=price)
 
-        if close_size == 0:
-            logger.info(f"GRVT: позиция {symbol} уже закрыта")
-            return {"symbol": symbol, "price": price, "fee": 0}
+            side = "sell" if was_long else "buy"
+            close_size = size if size > 0 else real_size
+            decimals = await self._get_size_precision(instrument)
+            close_size = round(close_size, decimals)
 
-        # Округляем до точности инструмента
-        decimals = await self._get_size_precision(instrument)
-        close_size = round(close_size, decimals)
+            logger.info(f"GRVT: закрытие {symbol}, size={close_size}")
 
-        logger.info(f"GRVT: закрытие {symbol}, size={close_size}")
-
-        order = await api.create_order(
-            symbol=instrument,
-            order_type="market",
-            side=side,
-            amount=Decimal(str(close_size)),
-        )
-
-        # GRVT SDK иногда возвращает None при первой попытке — делаем один retry
-        if not order:
-            logger.warning(f"GRVT: пустой ответ при закрытии {symbol}, retry через 2с...")
-            import asyncio as _asyncio
-            await _asyncio.sleep(2)
             order = await api.create_order(
-                symbol=instrument,
-                order_type="market",
-                side=side,
-                amount=Decimal(str(close_size)),
+                symbol=instrument, order_type="market", side=side, amount=Decimal(str(close_size)),
             )
 
-        if not order:
-            raise RuntimeError(f"GRVT: закрытие {symbol} отклонено биржей (пустой ответ от API)")
+            if not order:
+                logger.warning(f"GRVT: пустой ответ при закрытии {symbol}, retry через 2с...")
+                await asyncio.sleep(2)
+                order = await api.create_order(
+                    symbol=instrument, order_type="market", side=side, amount=Decimal(str(close_size)),
+                )
 
-        exit_price = float(order.get("average") or order.get("price") or price)
-        logger.info(f"GRVT: позиция {symbol} закрыта, price={exit_price}")
-        return {"symbol": symbol, "price": exit_price, "fee": 0}
+            if not order:
+                return CloseResult(status=ExchangeStatus.UNKNOWN, error=f"GRVT: пустой ответ при закрытии {symbol}")
 
-    async def _get_position_size(self, symbol: str) -> float | None:
-        """Возвращает размер открытой позиции (+ лонг, - шорт)."""
-        positions = await self.get_positions()
-        if positions is None:
-            return None
-        for pos in positions:
-            if pos["symbol"] == symbol.upper():
-                return pos["quantity"]
-        return 0
+            exit_price = float(order.get("average") or order.get("price") or price)
+            logger.info(f"GRVT: позиция {symbol} закрыта, price={exit_price}")
+            return CloseResult(status=ExchangeStatus.OK, price=exit_price, fee=0)
 
-    async def get_positions(self) -> list[dict] | None:
+        except Exception as e:
+            logger.error(f"GRVT market_close {symbol} ошибка: {e}")
+            return CloseResult(status=ExchangeStatus.API_ERROR, error=str(e))
+
+    async def get_positions(self) -> PositionResult:
         try:
             api = await self._get_api()
             raw = await api.fetch_positions()
 
-            # SDK может молча вернуть [] при ошибке авторизации — retry один раз
             if not raw:
-                import asyncio
                 await asyncio.sleep(2)
-                # Сбрасываем SDK чтобы переавторизовался
                 self._api = None
                 self._markets_loaded = False
                 api = await self._get_api()
                 raw = await api.fetch_positions()
                 if not raw:
                     logger.warning("GRVT get_positions: пустой результат после retry — возможно ошибка авторизации")
-                    return None
+                    return PositionResult(status=ExchangeStatus.API_ERROR, error="пустой ответ после retry")
 
             positions = []
             for pos in raw:
                 symbol_raw = pos.get("instrument") or pos.get("symbol") or ""
-                # BTC_USDT_Perp → BTC
-                symbol = symbol_raw.split("_")[0].upper() if "_" in symbol_raw else symbol_raw
-                # GRVT возвращает "size" со знаком: минус = short, плюс = long
+                sym = symbol_raw.split("_")[0].upper() if "_" in symbol_raw else symbol_raw
                 qty = float(pos.get("size") or pos.get("contracts") or pos.get("amount") or 0)
                 if qty != 0:
-                    positions.append({"symbol": symbol, "quantity": qty})
-            return positions
+                    positions.append({"symbol": sym, "quantity": qty})
+            return PositionResult(status=ExchangeStatus.OK, positions=positions)
+
         except Exception as e:
             logger.warning(f"GRVT get_positions ошибка: {e}")
+            return PositionResult(status=ExchangeStatus.API_ERROR, error=str(e))
+
+    async def _get_position_size(self, symbol: str) -> float | None:
+        """Вспомогательный метод для market_open."""
+        result = await self.get_positions()
+        if result.status != ExchangeStatus.OK:
             return None
+        for pos in result.positions:
+            if pos["symbol"] == symbol.upper():
+                return pos["quantity"]
+        return 0
 
     async def get_balance(self) -> float | None:
         try:
             api = await self._get_api()
             balance = await api.fetch_balance()
-            # SDK может не авторизоваться с первой попытки — retry
             if not balance:
-                import asyncio
                 await asyncio.sleep(2)
                 self._api = None
                 self._markets_loaded = False
                 api = await self._get_api()
                 balance = await api.fetch_balance()
-            # Ищем USDT баланс
             if isinstance(balance, dict):
                 usdt = balance.get("USDT", {})
                 if isinstance(usdt, dict):

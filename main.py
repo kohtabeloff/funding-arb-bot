@@ -27,6 +27,7 @@ from scanners.grvt import GRVTScanner
 from scanners.aster import AsterScanner
 from core.analyzer import find_pair_opportunities, calc_net_apr_for_pair
 from core.executor import open_pair, close_pair, scale_in_pair, get_executor, preflight_close, preflight_open
+from core.exchanges.base import ExchangeStatus
 from bot.telegram import send_pair_signal, send_message, send_message_get_id
 from db.database import (
     init_db, save_funding_snapshot,
@@ -296,11 +297,11 @@ async def _verify_positions(exchange_rates: dict):
                 continue
             try:
                 executor = get_executor(exch)
-                positions = await executor.get_positions()
-                if positions is not None:
-                    real_positions[exch] = {p["symbol"]: p["quantity"] for p in positions}
+                pos_result = await executor.get_positions()
+                if pos_result.status == ExchangeStatus.OK:
+                    real_positions[exch] = {p["symbol"]: p["quantity"] for p in pos_result.positions}
                 else:
-                    logger.warning(f"Верификация: {exch} вернул None — пропускаем")
+                    logger.warning(f"Верификация: {exch} ошибка — {pos_result.error}")
             except Exception as e:
                 logger.warning(f"Верификация: {exch} недоступен: {e}")
 

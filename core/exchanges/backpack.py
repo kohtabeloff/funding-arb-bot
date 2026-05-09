@@ -5,7 +5,7 @@ import time
 
 import httpx
 
-from .base import BaseExchangeExecutor
+from .base import BaseExchangeExecutor, CloseResult, ExchangeStatus, PositionResult
 
 logger = logging.getLogger(__name__)
 
@@ -162,52 +162,62 @@ class BackpackExecutor(BaseExchangeExecutor):
             "price": executed_price,
         }
 
-    async def market_close(self, symbol: str, size: float = 0, was_long: bool = True) -> dict:
-        bp_symbol = self._bp_symbol(symbol)
-        mark_price = await self.get_mark_price(symbol)
+    async def market_close(self, symbol: str, size: float = 0, was_long: bool = True) -> CloseResult:
+        try:
+            bp_symbol = self._bp_symbol(symbol)
+            mark_price = await self.get_mark_price(symbol)
 
-        # Всегда проверяем реальную позицию на бирже перед закрытием
-        raw_positions = await self._get_raw_positions()
-        pos = next((p for p in raw_positions if p.get("symbol") == bp_symbol), None)
-        real_qty = float(pos.get("netQuantity") or pos.get("quantity") or 0) if pos else 0
-        if real_qty == 0:
-            logger.info(f"Backpack: позиция {symbol} уже закрыта на бирже")
-            return {"symbol": symbol, "closed_qty": 0, "price": mark_price}
+            pos_result = await self.get_positions()
+            if pos_result.status == ExchangeStatus.API_ERROR:
+                return CloseResult(status=ExchangeStatus.API_ERROR, error=pos_result.error)
+            if pos_result.status == ExchangeStatus.UNKNOWN:
+                return CloseResult(status=ExchangeStatus.UNKNOWN, error=pos_result.error)
 
-        if size > 0:
-            side = "Ask" if was_long else "Bid"
-            qty = size
-        else:
-            qty = real_qty
-            side = "Ask" if qty > 0 else "Bid"
+            pos = next((p for p in pos_result.positions if p["symbol"] == symbol.upper()), None)
+            real_qty = abs(pos["quantity"]) if pos else 0
 
-        params = {
-            "orderType": "Market",
-            "quantity": f"{abs(qty):g}",
-            "reduceOnly": True,
-            "side": side,
-            "symbol": bp_symbol,
-        }
-        headers = self._sign("orderExecute", params)
+            if real_qty == 0:
+                logger.info(f"Backpack: позиция {symbol} уже закрыта (подтверждено API)")
+                return CloseResult(status=ExchangeStatus.ALREADY_CLOSED, price=mark_price)
 
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                f"{self.BASE_URL}/api/v1/order",
-                json=params,
-                headers=headers,
-            )
-            result = resp.json()
+            if size > 0:
+                side = "Ask" if was_long else "Bid"
+                qty = size
+            else:
+                qty = real_qty
+                side = "Ask" if (pos["quantity"] if pos else 0) > 0 else "Bid"
 
-        if resp.status_code not in (200, 201):
-            raise RuntimeError(f"Backpack ошибка закрытия: {result}")
+            params = {
+                "orderType": "Market",
+                "quantity": f"{abs(qty):g}",
+                "reduceOnly": True,
+                "side": side,
+                "symbol": bp_symbol,
+            }
+            headers = self._sign("orderExecute", params)
 
-        exit_price = float(result.get("avgPrice") or result.get("price") or mark_price)
-        fees_paid = float(result.get("fee") or 0)
-        logger.info(f"Backpack: закрыта позиция {symbol}, qty={abs(qty)}, price={exit_price}")
-        return {"symbol": symbol, "closed_qty": abs(qty), "price": exit_price, "fee": fees_paid}
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{self.BASE_URL}/api/v1/order",
+                    json=params,
+                    headers=headers,
+                )
+                result = resp.json()
+
+            if resp.status_code not in (200, 201):
+                return CloseResult(status=ExchangeStatus.API_ERROR, error=f"Backpack ошибка закрытия: {result}")
+
+            exit_price = float(result.get("avgPrice") or result.get("price") or mark_price)
+            fees_paid = float(result.get("fee") or 0)
+            logger.info(f"Backpack: закрыта позиция {symbol}, qty={abs(qty)}, price={exit_price}")
+            return CloseResult(status=ExchangeStatus.OK, price=exit_price, fee=fees_paid)
+
+        except Exception as e:
+            logger.error(f"Backpack market_close {symbol} ошибка: {e}")
+            return CloseResult(status=ExchangeStatus.API_ERROR, error=str(e))
 
     async def _get_raw_positions(self) -> list:
-        """Возвращает сырые позиции с API (без нормализации)."""
+        """Возвращает сырые позиции с API. Бросает исключение при ошибке."""
         params = {}
         headers = self._sign("positionQuery", params)
         get_headers = {k: v for k, v in headers.items() if k != "Content-Type"}
@@ -217,19 +227,22 @@ class BackpackExecutor(BaseExchangeExecutor):
                 headers=get_headers,
             )
             if resp.status_code != 200:
-                logger.error(f"Backpack positions error: {resp.text}")
-                return []
+                raise RuntimeError(f"Backpack: не удалось получить позиции (HTTP {resp.status_code}): {resp.text}")
             return resp.json()
 
-    async def get_positions(self) -> list[dict] | None:
-        raw = await self._get_raw_positions()
-        result = []
-        for pos in raw:
-            sym = pos.get("symbol", "").replace("_USDC_PERP", "").upper()
-            qty = float(pos.get("netQuantity") or pos.get("quantity") or 0)
-            if qty != 0:
-                result.append({"symbol": sym, "quantity": qty})
-        return result
+    async def get_positions(self) -> PositionResult:
+        try:
+            raw = await self._get_raw_positions()
+            positions = []
+            for pos in raw:
+                sym = pos.get("symbol", "").replace("_USDC_PERP", "").upper()
+                qty = float(pos.get("netQuantity") or pos.get("quantity") or 0)
+                if qty != 0:
+                    positions.append({"symbol": sym, "quantity": qty})
+            return PositionResult(status=ExchangeStatus.OK, positions=positions)
+        except Exception as e:
+            logger.warning(f"Backpack get_positions ошибка: {e}")
+            return PositionResult(status=ExchangeStatus.API_ERROR, error=str(e))
 
     async def get_balance(self) -> float | None:
         params = {}
@@ -248,21 +261,17 @@ class BackpackExecutor(BaseExchangeExecutor):
         return 0.0
 
     async def get_liquidation_info(self, symbol: str) -> dict | None:
-        raw = await self._get_raw_positions()
-        bp_symbol = self._bp_symbol(symbol)
-        pos = next((p for p in raw if p.get("symbol") == bp_symbol), None)
-        if not pos:
-            return None
         try:
+            raw = await self._get_raw_positions()
+            bp_symbol = self._bp_symbol(symbol)
+            pos = next((p for p in raw if p.get("symbol") == bp_symbol), None)
+            if not pos:
+                return None
             liq_price = float(pos.get("liquidationPrice") or 0)
             mark_price = float(pos.get("markPrice") or 0)
             leverage = pos.get("leverage", "?")
             if liq_price > 0 and mark_price > 0:
-                return {
-                    "liquidation_price": liq_price,
-                    "mark_price": mark_price,
-                    "leverage": leverage,
-                }
-        except (ValueError, TypeError):
+                return {"liquidation_price": liq_price, "mark_price": mark_price, "leverage": leverage}
+        except Exception:
             pass
         return None

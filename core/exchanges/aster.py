@@ -11,7 +11,7 @@ import time
 
 import httpx
 
-from .base import BaseExchangeExecutor
+from .base import BaseExchangeExecutor, CloseResult, ExchangeStatus, PositionResult
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +27,9 @@ class AsterExecutor(BaseExchangeExecutor):
     def __init__(self, api_key: str, api_secret: str):
         self._api_key = api_key
         self._api_secret = api_secret
-        self._exchange_info: dict = {}  # symbol → {stepSize, tickSize, ...}
+        self._exchange_info: dict = {}
 
     def _sign(self, params: dict) -> str:
-        """HMAC SHA256 подпись параметров запроса."""
         query = "&".join(f"{k}={v}" for k, v in params.items())
         return hmac.new(
             self._api_secret.encode(),
@@ -42,11 +41,9 @@ class AsterExecutor(BaseExchangeExecutor):
         return {"X-MBX-APIKEY": self._api_key}
 
     def _aster_symbol(self, symbol: str) -> str:
-        """BTC → BTCUSDT"""
         return f"{symbol.upper()}USDT"
 
     async def _ensure_exchange_info(self):
-        """Загружает фильтры символов (stepSize, tickSize)."""
         if self._exchange_info:
             return
         try:
@@ -65,7 +62,6 @@ class AsterExecutor(BaseExchangeExecutor):
             logger.warning(f"Aster: не удалось загрузить exchangeInfo: {e}")
 
     def _round_qty(self, aster_symbol: str, qty: float) -> float:
-        """Округляет количество до stepSize."""
         info = self._exchange_info.get(aster_symbol, {})
         step = info.get("step_size", 0.001)
         rounded = math.floor(qty / step) * step
@@ -80,11 +76,8 @@ class AsterExecutor(BaseExchangeExecutor):
                 params={"symbol": aster_sym},
             )
             data = resp.json()
-
-        # Может вернуть объект или список
         if isinstance(data, list):
             data = data[0] if data else {}
-
         price = float(data.get("markPrice") or 0)
         if price == 0:
             raise ValueError(f"Не удалось получить цену {symbol} на Aster")
@@ -102,20 +95,13 @@ class AsterExecutor(BaseExchangeExecutor):
 
         side = "BUY" if is_long else "SELL"
         params = {
-            "symbol": aster_sym,
-            "side": side,
-            "type": "MARKET",
-            "quantity": str(quantity),
-            "timestamp": str(int(time.time() * 1000)),
+            "symbol": aster_sym, "side": side, "type": "MARKET",
+            "quantity": str(quantity), "timestamp": str(int(time.time() * 1000)),
         }
         params["signature"] = self._sign(params)
 
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                f"{BASE_URL}/fapi/v1/order",
-                params=params,
-                headers=self._headers(),
-            )
+            resp = await client.post(f"{BASE_URL}/fapi/v1/order", params=params, headers=self._headers())
             result = resp.json()
 
         if resp.status_code not in (200, 201):
@@ -124,7 +110,6 @@ class AsterExecutor(BaseExchangeExecutor):
         executed_qty = float(result.get("executedQty") or 0)
         avg_price = float(result.get("avgPrice") or 0)
 
-        # Aster может вернуть 0 — ордер ещё не исполнен, дозапрашиваем
         if executed_qty <= 0 or avg_price <= 0:
             order_id = result.get("orderId")
             if order_id:
@@ -135,17 +120,10 @@ class AsterExecutor(BaseExchangeExecutor):
             if avg_price <= 0:
                 avg_price = price
 
-        logger.info(f"Aster: открыт {'лонг' if is_long else 'шорт'} {symbol}, "
-                    f"qty={executed_qty}, price={avg_price}")
-        return {
-            "order_id": result.get("orderId"),
-            "size": executed_qty,
-            "size_usd": size_usd,
-            "price": avg_price,
-        }
+        logger.info(f"Aster: открыт {'лонг' if is_long else 'шорт'} {symbol}, qty={executed_qty}, price={avg_price}")
+        return {"order_id": result.get("orderId"), "size": executed_qty, "size_usd": size_usd, "price": avg_price}
 
     async def market_open_by_qty(self, symbol: str, is_long: bool, quantity: float) -> dict:
-        """Открывает позицию по точному количеству (для синхронизации ног)."""
         await self._ensure_exchange_info()
         aster_sym = self._aster_symbol(symbol)
         price = await self.get_mark_price(symbol)
@@ -157,20 +135,13 @@ class AsterExecutor(BaseExchangeExecutor):
 
         side = "BUY" if is_long else "SELL"
         params = {
-            "symbol": aster_sym,
-            "side": side,
-            "type": "MARKET",
-            "quantity": str(quantity),
-            "timestamp": str(int(time.time() * 1000)),
+            "symbol": aster_sym, "side": side, "type": "MARKET",
+            "quantity": str(quantity), "timestamp": str(int(time.time() * 1000)),
         }
         params["signature"] = self._sign(params)
 
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                f"{BASE_URL}/fapi/v1/order",
-                params=params,
-                headers=self._headers(),
-            )
+            resp = await client.post(f"{BASE_URL}/fapi/v1/order", params=params, headers=self._headers())
             result = resp.json()
 
         if resp.status_code not in (200, 201):
@@ -189,100 +160,87 @@ class AsterExecutor(BaseExchangeExecutor):
             if avg_price <= 0:
                 avg_price = price
 
-        logger.info(f"Aster: открыт {'лонг' if is_long else 'шорт'} {symbol}, "
-                    f"qty={executed_qty}, price={avg_price}")
-        return {
-            "order_id": result.get("orderId"),
-            "size": executed_qty,
-            "size_usd": executed_qty * avg_price,
-            "price": avg_price,
-        }
+        logger.info(f"Aster: открыт {'лонг' if is_long else 'шорт'} {symbol}, qty={executed_qty}, price={avg_price}")
+        return {"order_id": result.get("orderId"), "size": executed_qty, "size_usd": executed_qty * avg_price, "price": avg_price}
 
     async def _query_order(self, aster_sym: str, order_id) -> tuple[float, float]:
-        """Запрашивает статус ордера чтобы получить fill."""
         try:
             params = {
-                "symbol": aster_sym,
-                "orderId": str(order_id),
+                "symbol": aster_sym, "orderId": str(order_id),
                 "timestamp": str(int(time.time() * 1000)),
             }
             params["signature"] = self._sign(params)
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(
-                    f"{BASE_URL}/fapi/v1/order",
-                    params=params,
-                    headers=self._headers(),
-                )
+                resp = await client.get(f"{BASE_URL}/fapi/v1/order", params=params, headers=self._headers())
                 data = resp.json()
             return float(data.get("executedQty") or 0), float(data.get("avgPrice") or 0)
         except Exception as e:
             logger.warning(f"Aster _query_order ошибка: {e}")
             return 0.0, 0.0
 
-    async def market_close(self, symbol: str, size: float = 0, was_long: bool = True) -> dict:
-        await self._ensure_exchange_info()
-        aster_sym = self._aster_symbol(symbol)
-        price = await self.get_mark_price(symbol)
-
-        # Всегда проверяем реальную позицию на бирже перед закрытием
-        positions = await self.get_positions()
-        pos = next((p for p in positions if p["symbol"] == symbol.upper()), None) if positions else None
-        real_size = abs(pos["quantity"]) if pos else 0
-        if real_size == 0:
-            logger.info(f"Aster: позиция {symbol} уже закрыта на бирже")
-            return {"symbol": symbol, "price": price, "fee": 0}
-
-        # Берём минимум из размера в БД и реального — чтобы reduceOnly не падал
-        if size <= 0:
-            size = real_size
-        else:
-            size = min(size, real_size)
-
-        quantity = self._round_qty(aster_sym, size)
-        side = "SELL" if was_long else "BUY"
-
-        params = {
-            "symbol": aster_sym,
-            "side": side,
-            "type": "MARKET",
-            "quantity": str(quantity),
-            "reduceOnly": "true",
-            "timestamp": str(int(time.time() * 1000)),
-        }
-        params["signature"] = self._sign(params)
-
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                f"{BASE_URL}/fapi/v1/order",
-                params=params,
-                headers=self._headers(),
-            )
-            result = resp.json()
-
-        if resp.status_code not in (200, 201):
-            raise RuntimeError(f"Aster ошибка закрытия: {result}")
-
-        exit_price = float(result.get("avgPrice") or price)
-        fees = float(result.get("commission") or 0)
-        logger.info(f"Aster: закрыта позиция {symbol}, qty={quantity}, price={exit_price}")
-        return {"symbol": symbol, "price": exit_price, "fee": fees}
-
-    async def get_positions(self) -> list[dict] | None:
+    async def market_close(self, symbol: str, size: float = 0, was_long: bool = True) -> CloseResult:
         try:
+            await self._ensure_exchange_info()
+            aster_sym = self._aster_symbol(symbol)
+            price = await self.get_mark_price(symbol)
+
+            pos_result = await self.get_positions()
+            if pos_result.status == ExchangeStatus.API_ERROR:
+                return CloseResult(status=ExchangeStatus.API_ERROR, error=pos_result.error)
+            if pos_result.status == ExchangeStatus.UNKNOWN:
+                return CloseResult(status=ExchangeStatus.UNKNOWN, error=pos_result.error)
+
+            pos = next((p for p in pos_result.positions if p["symbol"] == symbol.upper()), None)
+            real_size = abs(pos["quantity"]) if pos else 0
+            if real_size == 0:
+                logger.info(f"Aster: позиция {symbol} уже закрыта (подтверждено API)")
+                return CloseResult(status=ExchangeStatus.ALREADY_CLOSED, price=price)
+
+            if size <= 0:
+                size = real_size
+            else:
+                size = min(size, real_size)
+
+            quantity = self._round_qty(aster_sym, size)
+            side = "SELL" if was_long else "BUY"
+
             params = {
+                "symbol": aster_sym, "side": side, "type": "MARKET",
+                "quantity": str(quantity), "reduceOnly": "true",
                 "timestamp": str(int(time.time() * 1000)),
             }
             params["signature"] = self._sign(params)
 
             async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(f"{BASE_URL}/fapi/v1/order", params=params, headers=self._headers())
+                result = resp.json()
+
+            if resp.status_code not in (200, 201):
+                return CloseResult(status=ExchangeStatus.API_ERROR, error=f"Aster ошибка закрытия: {result}")
+
+            exit_price = float(result.get("avgPrice") or price)
+            fees = float(result.get("commission") or 0)
+            logger.info(f"Aster: закрыта позиция {symbol}, qty={quantity}, price={exit_price}")
+            return CloseResult(status=ExchangeStatus.OK, price=exit_price, fee=fees)
+
+        except Exception as e:
+            logger.error(f"Aster market_close {symbol} ошибка: {e}")
+            return CloseResult(status=ExchangeStatus.API_ERROR, error=str(e))
+
+    async def get_positions(self) -> PositionResult:
+        try:
+            params = {"timestamp": str(int(time.time() * 1000))}
+            params["signature"] = self._sign(params)
+
+            async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(
                     f"{BASE_URL}/fapi/v2/positionRisk",
-                    params=params,
-                    headers=self._headers(),
+                    params=params, headers=self._headers(),
                 )
                 if resp.status_code != 200:
                     logger.warning(f"Aster positions error: {resp.text[:200]}")
-                    return None
+                    return PositionResult(status=ExchangeStatus.API_ERROR,
+                                         error=f"HTTP {resp.status_code}: {resp.text[:200]}")
                 data = resp.json()
 
             positions = []
@@ -293,31 +251,28 @@ class AsterExecutor(BaseExchangeExecutor):
                 raw_symbol = pos.get("symbol", "")
                 symbol = raw_symbol.replace("USDT", "").replace("USDC", "")
                 positions.append({"symbol": symbol, "quantity": qty})
-            return positions
+            return PositionResult(status=ExchangeStatus.OK, positions=positions)
+
         except Exception as e:
             logger.warning(f"Aster get_positions ошибка: {e}")
-            return None
+            return PositionResult(status=ExchangeStatus.API_ERROR, error=str(e))
 
     async def get_balance(self) -> float | None:
         try:
-            params = {
-                "timestamp": str(int(time.time() * 1000)),
-            }
+            params = {"timestamp": str(int(time.time() * 1000))}
             params["signature"] = self._sign(params)
 
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(
                     f"{BASE_URL}/fapi/v2/balance",
-                    params=params,
-                    headers=self._headers(),
+                    params=params, headers=self._headers(),
                 )
                 if resp.status_code != 200:
                     return None
                 data = resp.json()
 
             for item in data:
-                asset = item.get("asset", "")
-                if asset in ("USDT", "USDC"):
+                if item.get("asset", "") in ("USDT", "USDC"):
                     return float(item.get("balance") or item.get("availableBalance") or 0)
             return 0.0
         except Exception as e:
@@ -325,20 +280,15 @@ class AsterExecutor(BaseExchangeExecutor):
             return None
 
     async def get_liquidation_info(self, symbol: str) -> dict | None:
-        """Получает ликвидационную цену из positionRisk."""
         try:
             aster_sym = self._aster_symbol(symbol)
-            params = {
-                "symbol": aster_sym,
-                "timestamp": str(int(time.time() * 1000)),
-            }
+            params = {"symbol": aster_sym, "timestamp": str(int(time.time() * 1000))}
             params["signature"] = self._sign(params)
 
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(
                     f"{BASE_URL}/fapi/v2/positionRisk",
-                    params=params,
-                    headers=self._headers(),
+                    params=params, headers=self._headers(),
                 )
                 if resp.status_code != 200:
                     return None
@@ -350,11 +300,7 @@ class AsterExecutor(BaseExchangeExecutor):
                     mark_price = float(pos.get("markPrice") or 0)
                     leverage = pos.get("leverage", "?")
                     if liq_price > 0 and mark_price > 0:
-                        return {
-                            "liquidation_price": liq_price,
-                            "mark_price": mark_price,
-                            "leverage": leverage,
-                        }
+                        return {"liquidation_price": liq_price, "mark_price": mark_price, "leverage": leverage}
             return None
         except Exception as e:
             logger.debug(f"Aster liquidation info ошибка: {e}")
