@@ -167,7 +167,7 @@ RU = {
     # ─── Signal (bot/telegram.py) ────────────────────────────────────────────
     "signal_net_apr": "📈 Нетто",
     "signal_fee": "комиссия",
-    "signal_price_spread": "💱 Спред цен: ~{spread:.2f}% (туда-обратно: ~{roundtrip:.2f}%)",
+    "signal_price_spread": "💱 Спред цен: ~{spread:.2f}%",
     "signal_breakeven": "⏳ Окупится: ~{days:.1f}д",
 
     # ─── Blacklist ───────────────────────────────────────────────────────────
@@ -354,7 +354,7 @@ EN = {
     # ─── Signal (bot/telegram.py) ────────────────────────────────────────────
     "signal_net_apr": "📈 Net",
     "signal_fee": "fee",
-    "signal_price_spread": "💱 Price spread: ~{spread:.2f}% (round-trip: ~{roundtrip:.2f}%)",
+    "signal_price_spread": "💱 Price spread: ~{spread:.2f}%",
     "signal_breakeven": "⏳ Breakeven: ~{days:.1f}d",
 
     # ─── Blacklist ───────────────────────────────────────────────────────────

@@ -190,6 +190,53 @@ async def open_pair(
     }
 
 
+async def preflight_open(exchange_a_name: str, exchange_b_name: str) -> list[str]:
+    """
+    Проверяет перед открытием, что обе биржи отвечают.
+    Возвращает список проблем (пустой = всё ок).
+    """
+    problems = []
+    exchanges = [exchange_a_name, exchange_b_name]
+    checks = await asyncio.gather(*[
+        get_executor(name).get_balance()
+        for name in exchanges
+    ], return_exceptions=True)
+
+    for name, result in zip(exchanges, checks):
+        if isinstance(result, Exception):
+            problems.append(f"{name}: API не отвечает ({result})")
+        elif result is None:
+            problems.append(f"{name}: не удалось получить баланс (возможно ошибка авторизации)")
+
+    return problems
+
+
+async def preflight_close(symbol: str, legs: list[dict]) -> list[str]:
+    """
+    Проверяет перед закрытием, что все биржи отвечают и позиции реально существуют.
+    Возвращает список проблем (пустой = всё ок).
+    """
+    problems = []
+    checks = await asyncio.gather(*[
+        get_executor(leg["exchange"]).get_positions()
+        for leg in legs
+    ], return_exceptions=True)
+
+    for leg, result in zip(legs, checks):
+        exch = leg["exchange"]
+        if isinstance(result, Exception):
+            problems.append(f"{exch}: API не отвечает ({result})")
+            continue
+        if result is None:
+            problems.append(f"{exch}: не удалось получить позиции (возможно ошибка авторизации)")
+            continue
+        found = any(p["symbol"].upper() == symbol.upper() for p in result)
+        if not found:
+            problems.append(f"{exch}: позиция {symbol} не найдена на бирже")
+
+    return problems
+
+
 async def close_pair(pair_id: str, symbol: str, legs: list[dict]) -> dict:
     """
     Закрывает обе ноги пары. legs — список позиций из БД.
@@ -204,7 +251,30 @@ async def close_pair(pair_id: str, symbol: str, legs: list[dict]) -> dict:
         was_long = (leg["direction"] == "LONG")
         tasks.append(executor.market_close(symbol, leg["size"], was_long))
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    results = list(await asyncio.gather(*tasks, return_exceptions=True))
+
+    # Ретраи для упавших ног — сразу, без ожидания следующего скана
+    RETRY_ATTEMPTS = 3
+    RETRY_DELAY = 3  # секунд между попытками
+
+    for attempt in range(RETRY_ATTEMPTS):
+        failed_indices = [i for i, r in enumerate(results) if isinstance(r, Exception)]
+        if not failed_indices:
+            break
+        logger.warning(
+            f"close_pair {pair_id}: {len(failed_indices)} ног не закрылось, "
+            f"retry {attempt + 1}/{RETRY_ATTEMPTS} через {RETRY_DELAY}с..."
+        )
+        await asyncio.sleep(RETRY_DELAY)
+        retry_tasks = [
+            get_executor(legs[i]["exchange"]).market_close(
+                symbol, legs[i]["size"], legs[i]["direction"] == "LONG"
+            )
+            for i in failed_indices
+        ]
+        retry_results = await asyncio.gather(*retry_tasks, return_exceptions=True)
+        for i, retry_result in zip(failed_indices, retry_results):
+            results[i] = retry_result
 
     # Собираем P&L для успешно закрытых ног
     leg_pnl: dict = {}

@@ -26,7 +26,7 @@ from scanners.lighter import LighterScanner
 from scanners.grvt import GRVTScanner
 from scanners.aster import AsterScanner
 from core.analyzer import find_pair_opportunities, calc_net_apr_for_pair
-from core.executor import open_pair, close_pair, scale_in_pair, get_executor
+from core.executor import open_pair, close_pair, scale_in_pair, get_executor, preflight_close, preflight_open
 from bot.telegram import send_pair_signal, send_message, send_message_get_id
 from db.database import (
     init_db, save_funding_snapshot,
@@ -555,6 +555,25 @@ async def _auto_close_pair(pair_id: str, symbol: str, legs: list, reason: str):
     try:
         if not legs:
             legs = await get_positions_by_pair(pair_id)
+
+        # Preflight: проверяем все биржи перед тем как трогать хоть одну ногу
+        problems = await preflight_close(symbol, legs)
+        if problems:
+            exch_names = " × ".join(l["exchange"] for l in legs)
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Закрыть вручную", callback_data=f"close_pair:{pair_id}:{symbol}")
+            ]])
+            await send_message(
+                f"🚨 <b>АВТОЗАКРЫТИЕ ОТМЕНЕНО — {symbol}</b> ({exch_names})\n\n"
+                f"Причина закрытия: {reason}\n\n"
+                f"⚠️ Не закрываю ничего, чтобы не оставить незахеджированную ногу:\n"
+                + "\n".join(f"• {p}" for p in problems) +
+                f"\n\n❗ <b>Закрой вручную как только биржи станут доступны!</b>",
+                reply_markup=keyboard,
+            )
+            logger.error(f"Автозакрытие {pair_id} отменено (preflight): {problems}")
+            return
+
         async with _trade_lock:
             await close_pair(pair_id=pair_id, symbol=symbol, legs=legs)
         exch_names = " × ".join(l["exchange"] for l in legs)
@@ -1196,6 +1215,19 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.info(f"Направления обновлены: {exch_a}={dir_a}, {exch_b}={dir_b}")
 
             entry_apr = new_net if fresh_rates else signal_apr
+
+            # Preflight: проверяем обе биржи перед открытием
+            problems = await preflight_open(exch_a, exch_b)
+            if problems:
+                await query.edit_message_text(
+                    f"🚨 <b>Открытие отменено — {symbol}</b>\n\n"
+                    f"⚠️ Не открываю, чтобы не оставить незахеджированную ногу:\n"
+                    + "\n".join(f"• {p}" for p in problems),
+                    parse_mode=ParseMode.HTML,
+                )
+                _opening_pairs.discard(lock_key)
+                return
+
             async with _trade_lock:
                 result = await open_pair(exch_a, exch_b, symbol, dir_a, dir_b, size, entry_apr=entry_apr)
             leg_a = result["leg_a"]
@@ -1222,8 +1254,22 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.edit_message_text(MSG["closing_pair"].format(symbol=symbol))
         try:
+            legs = await get_positions_by_pair(pair_id)
+            problems = await preflight_close(symbol, legs)
+            if problems:
+                err_kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔁 Попробовать ещё раз", callback_data=f"close_pair:{pair_id}:{symbol}")
+                ]])
+                await query.edit_message_text(
+                    f"🚨 <b>Закрытие отменено — {symbol}</b>\n\n"
+                    f"⚠️ Не закрываю, чтобы не оставить незахеджированную ногу:\n"
+                    + "\n".join(f"• {p}" for p in problems) +
+                    f"\n\nПопробуй ещё раз через минуту.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=err_kb,
+                )
+                return
             async with _trade_lock:
-                legs = await get_positions_by_pair(pair_id)
                 await close_pair(pair_id, symbol, legs)
             await query.edit_message_text(MSG["pair_closed"].format(symbol=symbol), parse_mode=ParseMode.HTML)
         except Exception as e:
@@ -1573,9 +1619,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if add_usd < 5:
                 await update.message.reply_text(MSG["min_size_error"])
                 return
+            legs = await get_positions_by_pair(pair_id)
+            problems = await preflight_close(symbol, legs)  # preflight_close проверяет наличие позиций на биржах
+            if problems:
+                await update.message.reply_text(
+                    f"🚨 <b>Добавление отменено — {symbol}</b>\n\n"
+                    f"⚠️ Не добавляю, чтобы не разбалансировать пару:\n"
+                    + "\n".join(f"• {p}" for p in problems),
+                    parse_mode=ParseMode.HTML,
+                )
+                return
             await update.message.reply_text(MSG["scale_in_adding"].format(amount=add_usd, symbol=symbol))
             async with _trade_lock:
-                legs = await get_positions_by_pair(pair_id)
                 result = await scale_in_pair(pair_id, symbol, legs, add_usd)
             await update.message.reply_text(
                 MSG["scale_in_done"].format(amount=add_usd, symbol=symbol),
