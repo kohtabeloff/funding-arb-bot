@@ -363,19 +363,20 @@ async def _handle_orphan_leg(pair_id: str, symbol: str, leg: dict):
     send_alert = now - _orphan_alerts_sent.get(alert_key, 0) >= ORPHAN_ALERT_COOLDOWN_SECONDS
 
     # Попытка закрытия — каждый цикл мониторинга (без cooldown)
-    try:
-        async with _trade_lock:
-            executor = get_executor(exch)
-            was_long = (direction == "LONG")
-            await executor.market_close(symbol, leg["size"], was_long)
-            await mark_position_closed(leg["id"])
-        # Закрылось — сообщаем
+    async with _trade_lock:
+        executor = get_executor(exch)
+        was_long = (direction == "LONG")
+        close_res = await executor.market_close(symbol, leg["size"], was_long)
+
+    if close_res.status in (ExchangeStatus.OK, ExchangeStatus.ALREADY_CLOSED):
+        await mark_position_closed(leg["id"])
         await send_message(
             f"✅ <b>{symbol}</b> ({exch}) — осиротевшая нога закрыта автоматически."
         )
         _orphan_alerts_sent.pop(alert_key, None)  # сбрасываем cooldown
-    except Exception as e:
-        logger.error(f"Не удалось закрыть осиротевшую ногу {pair_id} {exch}: {e}")
+    else:
+        err = close_res.error or close_res.status.value
+        logger.error(f"Не удалось закрыть осиротевшую ногу {pair_id} {exch}: {err}")
         if send_alert:
             _orphan_alerts_sent[alert_key] = now
             keyboard = InlineKeyboardMarkup([[
@@ -385,7 +386,7 @@ async def _handle_orphan_leg(pair_id: str, symbol: str, leg: dict):
                 f"⚠️ <b>Осиротевшая нога пары!</b>\n\n"
                 f"<b>{symbol}</b> — {exch} ({direction}), ${size_usd:.0f}\n"
                 f"Одна нога уже закрыта, эта осталась незахеджированной.\n"
-                f"❌ Автозакрытие не удалось: {e}\n"
+                f"❌ Автозакрытие не удалось: {err}\n"
                 f"⚠️ Закрой вручную немедленно!",
                 reply_markup=keyboard,
             )
@@ -1317,12 +1318,24 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await query.edit_message_text(MSG["position_not_found"].format(id=pos_id))
                     return
                 executor = get_executor(pos["exchange"])
-                await executor.market_close(pos["symbol"], pos["size"], pos["direction"] == "LONG")
+                close_res = await executor.market_close(pos["symbol"], pos["size"], pos["direction"] == "LONG")
+
+            if close_res.status in (ExchangeStatus.OK, ExchangeStatus.ALREADY_CLOSED):
                 await mark_position_closed(pos_id)
-            await query.edit_message_text(
-                MSG["position_closed"].format(symbol=symbol, exchange=pos['exchange']),
-                parse_mode=ParseMode.HTML,
-            )
+                await query.edit_message_text(
+                    MSG["position_closed"].format(symbol=symbol, exchange=pos['exchange']),
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                err = close_res.error or close_res.status.value
+                err_kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔧 Закрыть в БД (позиции уже нет)", callback_data=f"force_close_pos:{pos_id}:{symbol}")
+                ]])
+                await query.edit_message_text(
+                    MSG["close_error"].format(error=err),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=err_kb,
+                )
         except Exception as e:
             err_kb = InlineKeyboardMarkup([[
                 InlineKeyboardButton("🔧 Закрыть в БД (позиции уже нет)", callback_data=f"force_close_pos:{pos_id}:{symbol}")
@@ -1622,7 +1635,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(MSG["min_size_error"])
                 return
             legs = await get_positions_by_pair(pair_id)
-            problems = await preflight_close(symbol, legs)  # preflight_close проверяет наличие позиций на биржах
+            # Проверяем что все ноги в нормальном статусе — scale in в сломанную пару недопустим
+            bad_legs = [l for l in legs if l.get("status") != "open"]
+            if bad_legs:
+                bad_desc = ", ".join(f"{l['exchange']} ({l['status']})" for l in bad_legs)
+                await update.message.reply_text(
+                    f"🚨 <b>Добавление отменено — {symbol}</b>\n\n"
+                    f"⚠️ Пара в нестабильном состоянии: {bad_desc}\n"
+                    f"Сначала разберись с текущим статусом позиций.",
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+            problems = await preflight_close(symbol, legs)  # проверяет доступность API бирж
             if problems:
                 await update.message.reply_text(
                     f"🚨 <b>Добавление отменено — {symbol}</b>\n\n"
