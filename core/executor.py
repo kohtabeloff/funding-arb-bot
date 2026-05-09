@@ -7,7 +7,10 @@ import logging
 import time
 
 from core.exchanges.base import BaseExchangeExecutor, ExchangeStatus
-from db.database import save_pair, close_pair as db_close_pair, scale_pair_db_generic
+from db.database import (
+    save_pair, close_pair as db_close_pair, scale_pair_db_generic,
+    set_legs_closing, set_leg_close_failed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +268,13 @@ async def close_pair(pair_id: str, symbol: str, legs: list[dict]) -> dict:
         was_long = (leg["direction"] == "LONG")
         tasks.append(executor.market_close(symbol, leg["size"], was_long))
 
+    # Помечаем ноги как "closing" до отправки — чтобы при крэше бота было видно что зависло
+    leg_ids = [leg["id"] for leg in legs if "id" in leg]
+    try:
+        await set_legs_closing(leg_ids)
+    except Exception as db_err:
+        logger.warning(f"[close_pair] не удалось пометить ноги как closing: {db_err}")
+
     logger.info(f"[close_pair] ORDER_SENT | {pair_id} | {symbol} | {exch_names}")
     results = list(await asyncio.gather(*tasks, return_exceptions=True))
 
@@ -308,6 +318,14 @@ async def close_pair(pair_id: str, symbol: str, legs: list[dict]) -> dict:
         retry_results = await asyncio.gather(*retry_tasks, return_exceptions=True)
         for i, retry_result in zip(failed_indices, retry_results):
             results[i] = retry_result
+
+    # Помечаем окончательно упавшие ноги как close_failed
+    for leg, result in zip(legs, results):
+        if _is_failed(result) and "id" in leg:
+            try:
+                await set_leg_close_failed(leg["id"])
+            except Exception as db_err:
+                logger.warning(f"[close_pair] не удалось пометить ногу {leg['id']} как close_failed: {db_err}")
 
     # Собираем P&L для успешно закрытых ног
     leg_pnl: dict = {}

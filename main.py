@@ -36,6 +36,7 @@ from db.database import (
     save_setting, load_setting, get_avg_rate_since, get_avg_rate_between, get_avg_apr_since,
     add_to_blacklist, remove_from_blacklist, get_blacklist,
     save_preset, get_presets, delete_preset,
+    get_stuck_legs,
 )
 
 logging.basicConfig(
@@ -1643,6 +1644,25 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── Запуск ──────────────────────────────────────────────────────────────────
 
+async def _check_stuck_legs():
+    """При старте проверяет ноги с незавершённым статусом и шлёт алерт."""
+    try:
+        stuck = await get_stuck_legs()
+        if not stuck:
+            return
+        lines = ["⚠️ *Обнаружены незавершённые ноги после перезапуска бота:*\n"]
+        for leg in stuck:
+            status_icon = "🔄" if leg["status"] == "closing" else "❌"
+            lines.append(
+                f"{status_icon} *{leg['symbol']}* — {leg['exchange']} {leg['direction']} "
+                f"| статус: `{leg['status']}`"
+            )
+        lines.append("\n⚠️ Проверь позиции на биржах вручную и закрой при необходимости!")
+        await send_message("\n".join(lines))
+    except Exception as e:
+        logger.warning(f"_check_stuck_legs ошибка: {e}")
+
+
 async def post_init(app):
     """Выполняется после запуска бота."""
     await init_db()
@@ -1650,6 +1670,10 @@ async def post_init(app):
 
     # Сброс антиспама при запуске — чтобы сразу пришли сигналы
     _sent_signals.clear()
+
+    # Проверяем ноги с незавершённым статусом — могли зависнуть при крэше
+    asyncio.create_task(_check_stuck_legs())
+
     # Первое сканирование в фоне — бот запустится мгновенно, сигналы придут через ~10с
     asyncio.create_task(scan_and_notify())
 

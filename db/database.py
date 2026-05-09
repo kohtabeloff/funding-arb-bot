@@ -141,12 +141,45 @@ async def close_pair(pair_id: str, leg_pnl: dict = None):
         await db.commit()
 
 
-async def get_open_pairs() -> list[dict]:
-    """Возвращает открытые пары, сгруппированные по pair_id."""
+async def set_legs_closing(leg_ids: list[int]):
+    """Помечает ноги как 'closing' перед отправкой ордера на закрытие."""
+    if not leg_ids:
+        return
+    placeholders = ",".join("?" * len(leg_ids))
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            f"UPDATE positions SET status='closing' WHERE id IN ({placeholders})",
+            leg_ids,
+        )
+        await db.commit()
+
+
+async def set_leg_close_failed(leg_id: int):
+    """Помечает ногу как 'close_failed' после исчерпания всех ретраев."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE positions SET status='close_failed' WHERE id=?",
+            (leg_id,),
+        )
+        await db.commit()
+
+
+async def get_stuck_legs() -> list[dict]:
+    """Возвращает ноги со статусом 'closing' или 'close_failed' — требуют внимания."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM positions WHERE status = 'open' ORDER BY opened_at DESC"
+            "SELECT * FROM positions WHERE status IN ('closing', 'close_failed') ORDER BY opened_at DESC"
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+
+async def get_open_pairs() -> list[dict]:
+    """Возвращает активные пары (open/closing/close_failed), сгруппированные по pair_id."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM positions WHERE status != 'closed' ORDER BY opened_at DESC"
         ) as cursor:
             rows = [dict(row) for row in await cursor.fetchall()]
 
@@ -168,7 +201,7 @@ async def get_positions_by_pair(pair_id: str) -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM positions WHERE pair_id = ? AND status = 'open'",
+            "SELECT * FROM positions WHERE pair_id = ? AND status != 'closed'",
             (pair_id,)
         ) as cursor:
             return [dict(row) for row in await cursor.fetchall()]
