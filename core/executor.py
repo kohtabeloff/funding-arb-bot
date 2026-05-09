@@ -394,6 +394,7 @@ async def scale_in_pair(pair_id: str, symbol: str, legs: list, add_size_usd: flo
 
     # Если одна нога упала — откатываем остальные
     if any(oks) and not all(oks):
+        rollback_failures = []
         for i, (leg, result, ok) in enumerate(zip(legs, results, oks)):
             if ok:
                 exch_name = leg["exchange"]
@@ -401,11 +402,37 @@ async def scale_in_pair(pair_id: str, symbol: str, legs: list, add_size_usd: flo
                 is_long = (leg["direction"] == "LONG")
                 close_res = await executor.market_close(symbol, result["size"], is_long)
                 if close_res.status not in (ExchangeStatus.OK, ExchangeStatus.ALREADY_CLOSED):
+                    rollback_failures.append((exch_name, close_res.error or close_res.status.value))
                     logger.error(f"Не удалось откатить {exch_name} при scale_in: {close_res.error}")
-        errors = [str(r) for i, r in enumerate(results) if isinstance(r, Exception)]
+
+        open_errors = [str(r) for r in results if isinstance(r, Exception)]
         for executor in executors.values():
             await _close_executor(executor)
-        raise RuntimeError(f"Scale in отменён:\n" + "\n".join(errors))
+
+        if rollback_failures:
+            # Откат не удался — есть незахеджированная добавленная нога
+            crit_lines = "\n".join(f"• {exch}: {err}" for exch, err in rollback_failures)
+            logger.critical(
+                f"[scale_in] КРИТИЧНО! Незахеджированная нога после неудачного отката | "
+                f"{pair_id} | {symbol} | {crit_lines}"
+            )
+            try:
+                from bot.telegram import send_message
+                await send_message(
+                    f"🚨 *КРИТИЧНО! НЕЗАХЕДЖИРОВАННАЯ НОГА ПОСЛЕ SCALE IN!*\n\n"
+                    f"*{symbol}* — одна нога добавилась, вторая упала.\n"
+                    f"Автооткат тоже провалился:\n{crit_lines}\n\n"
+                    f"⚠️ *Немедленно проверь позиции на биржах и закрой лишнюю ногу вручную!*"
+                )
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"Scale in частично выполнен — НЕЗАХЕДЖИРОВАНО!\n"
+                f"Откат не удался: {crit_lines}\n"
+                f"⚠️ Проверь позиции на биржах вручную!"
+            )
+
+        raise RuntimeError(f"Scale in отменён:\n" + "\n".join(open_errors))
 
     if not any(oks):
         for executor in executors.values():
