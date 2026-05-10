@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
@@ -1701,8 +1702,11 @@ async def post_init(app):
     # Первое сканирование в фоне — бот запустится мгновенно, сигналы придут через ~10с
     asyncio.create_task(scan_and_notify())
 
+    # Планировщик: первый запуск через SCAN_INTERVAL_SECONDS (не сразу),
+    # чтобы не дублировать стартовый скан выше
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(scan_and_notify, "interval", seconds=SCAN_INTERVAL_SECONDS)
+    first_run = datetime.now(timezone.utc) + timedelta(seconds=SCAN_INTERVAL_SECONDS)
+    scheduler.add_job(scan_and_notify, "interval", seconds=SCAN_INTERVAL_SECONDS, next_run_time=first_run)
     scheduler.start()
     logger.info(f"Планировщик запущен: каждые {SCAN_INTERVAL_SECONDS} сек")
 
