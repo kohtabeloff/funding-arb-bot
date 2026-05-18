@@ -1191,6 +1191,11 @@ async def _fetch_rates_for_symbol(symbol: str, exch_a: str, exch_b: str):
 async def scan_manual(update: Update):
     """Ручное сканирование — отправляет карточки с кнопками."""
     msg = await update.message.reply_text(MSG["scanning"])
+    async with _scan_lock:
+        await _scan_manual_inner(msg)
+
+
+async def _scan_manual_inner(msg):
     exchange_rates = await fetch_all_rates()
     if not exchange_rates:
         await msg.edit_text(MSG["no_exchange_data"])
