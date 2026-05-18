@@ -466,10 +466,16 @@ async def _monitor_open_pairs(exchange_rates: dict):
                         InlineKeyboardButton("❌ Закрыть пару", callback_data=f"close_pair:{pair_id}:{symbol}"),
                     ]])
                     apr_details = " | ".join(_leg_apr_str(l) for l in legs)
+                    auto_close_note = (
+                        f"Жду <code>{int(_neg_apr_hours)}ч</code> — если не восстановится, закрою автоматически."
+                        if _protection_enabled else
+                        f"🛡 Защита выключена — слежу, но закрывать не буду."
+                    )
                     await send_message(
                         MSG["negative_funding_alert"].format(
                             symbol=symbol, apr_details=apr_details,
                             net_apr=net_apr, wait_hours=int(_neg_apr_hours),
+                            auto_close_note=auto_close_note,
                         ),
                         reply_markup=keyboard,
                     )
@@ -519,11 +525,17 @@ async def _monitor_open_pairs(exchange_rates: dict):
                             keyboard = InlineKeyboardMarkup([[
                                 InlineKeyboardButton("❌ Закрыть пару", callback_data=f"close_pair:{pair_id}:{symbol}"),
                             ]])
+                            auto_close_note = (
+                                f"⚠️ Закрою автоматически при <code>{LIQ_AUTO_CLOSE_PCT}%</code>"
+                                if _protection_enabled else
+                                f"🛡 Защита выключена — закрою при <code>{LIQ_AUTO_CLOSE_PCT}%</code> только вручную"
+                            )
                             await send_message(
                                 MSG["liq_risk_alert"].format(
                                     symbol=symbol, exchange=exch_name, direction=leg["direction"],
                                     distance=distance_pct, mark=mark_price, liq=liq_price,
                                     leverage=leverage, threshold=LIQ_AUTO_CLOSE_PCT,
+                                    auto_close_note=auto_close_note,
                                 ),
                                 reply_markup=keyboard,
                             )
@@ -559,11 +571,17 @@ async def _monitor_open_pairs(exchange_rates: dict):
                                 keyboard = InlineKeyboardMarkup([[
                                     InlineKeyboardButton("❌ Закрыть пару", callback_data=f"close_pair:{pair_id}:{symbol}"),
                                 ]])
+                                auto_close_note = (
+                                    f"⚠️ Закрою при <code>{_price_close_pct:.0f}%</code>"
+                                    if _protection_enabled else
+                                    f"🛡 Защита выключена — автозакрытие не сработает"
+                                )
                                 await send_message(
                                     MSG["price_risk_alert"].format(
                                         symbol=symbol, exchange=exch_name, direction=leg["direction"],
                                         direction_str=direction_str, loss=loss_pct,
                                         entry=entry, current=cur_price, threshold=_price_close_pct,
+                                        auto_close_note=auto_close_note,
                                     ),
                                     reply_markup=keyboard,
                                 )

@@ -125,7 +125,7 @@ RU = {
         "⚠️ <b>Фандинг ушёл в минус — {symbol}</b>\n\n"
         "{apr_details}\n"
         "Нетто: <code>{net_apr:+.1f}%</code> APR\n\n"
-        "Жду <code>{wait_hours}ч</code> — если не восстановится, закрою автоматически."
+        "{auto_close_note}"
     ),
     "auto_close_ok": (
         "🤖 <b>АВТОЗАКРЫТИЕ — {symbol}</b> ({exchanges})\n\n"
@@ -142,13 +142,13 @@ RU = {
         "⚠️ <b>РИСК ЛИКВИДАЦИИ — {symbol}</b>\n\n"
         "{exchange} ({direction}): до ликвидации <code>{distance:.1f}%</code>\n"
         "  Цена: <code>${mark:.4f}</code> → Ликвидация: <code>${liq:.4f}</code> (плечо {leverage}x)\n\n"
-        "⚠️ Закрою автоматически при <code>{threshold}%</code>"
+        "{auto_close_note}"
     ),
     "price_risk_alert": (
         "⚠️ <b>РИСК — {symbol}</b>\n\n"
         "{exchange} ({direction}): цена {direction_str} на <code>{loss:.1f}%</code>\n"
         "  Вход: <code>${entry:.4f}</code> → Сейчас: <code>${current:.4f}</code>\n\n"
-        "⚠️ Закрою при <code>{threshold}%</code>"
+        "{auto_close_note}"
     ),
     "position_mismatch": (
         "🚨 <b>РАСХОЖДЕНИЕ ПОЗИЦИЙ!</b>\n\n"
@@ -312,7 +312,7 @@ EN = {
         "⚠️ <b>Funding went negative — {symbol}</b>\n\n"
         "{apr_details}\n"
         "Net: <code>{net_apr:+.1f}%</code> APR\n\n"
-        "Waiting <code>{wait_hours}h</code> — if it doesn't recover, I'll close automatically."
+        "{auto_close_note}"
     ),
     "auto_close_ok": (
         "🤖 <b>AUTO-CLOSE — {symbol}</b> ({exchanges})\n\n"
@@ -329,13 +329,13 @@ EN = {
         "⚠️ <b>LIQUIDATION RISK — {symbol}</b>\n\n"
         "{exchange} ({direction}): <code>{distance:.1f}%</code> to liquidation\n"
         "  Price: <code>${mark:.4f}</code> → Liquidation: <code>${liq:.4f}</code> (leverage {leverage}x)\n\n"
-        "⚠️ Will auto-close at <code>{threshold}%</code>"
+        "{auto_close_note}"
     ),
     "price_risk_alert": (
         "⚠️ <b>RISK — {symbol}</b>\n\n"
         "{exchange} ({direction}): price {direction_str} by <code>{loss:.1f}%</code>\n"
         "  Entry: <code>${entry:.4f}</code> → Now: <code>${current:.4f}</code>\n\n"
-        "⚠️ Will close at <code>{threshold}%</code>"
+        "{auto_close_note}"
     ),
     "position_mismatch": (
         "🚨 <b>POSITION MISMATCH!</b>\n\n"
