@@ -187,6 +187,26 @@ async def _save_settings():
     await save_setting("price_close_pct", str(_price_close_pct))
 
 
+async def _load_alerts_cooldown():
+    """Загружает кулдаун алертов из БД — чтобы после рестарта не слать повторно."""
+    try:
+        data = await load_setting("liq_alerts_sent", "{}")
+        loaded = json.loads(data)
+        _liq_alerts_sent.update(loaded)
+    except Exception:
+        pass
+
+
+async def _save_alerts_cooldown():
+    """Сохраняет кулдаун алертов в БД. Удаляет устаревшие записи."""
+    try:
+        cutoff = time.time() - LIQ_ALERT_COOLDOWN_SECONDS * 2
+        pruned = {k: v for k, v in _liq_alerts_sent.items() if v > cutoff}
+        await save_setting("liq_alerts_sent", json.dumps(pruned))
+    except Exception:
+        pass
+
+
 # ─── История Net APR пар ─────────────────────────────────────────────────────
 # Отслеживаем сколько часов держится положительный Net APR для каждой пары.
 # Дипы короче FUNDING_DIP_TOLERANCE_HOURS игнорируются.
@@ -715,6 +735,7 @@ async def _scan_and_notify_inner():
     await _verify_positions(exchange_rates)
     await _monitor_open_pairs(exchange_rates)
     await _scan_opportunities(exchange_rates)
+    await _save_alerts_cooldown()
 
 
 # ─── Telegram handlers ──────────────────────────────────────────────────────
@@ -1190,6 +1211,8 @@ async def scan_manual(update: Update):
         await _enrich_opp_with_streaks(opp)
         total_size = get_position_size(opp["exchange_a"]) + get_position_size(opp["exchange_b"])
         await send_pair_signal(opp, size_usd=total_size)
+        signal_key = f"{opp['exchange_a']}:{opp['exchange_b']}:{opp['symbol']}:{opp['dir_a']}:{opp['dir_b']}"
+        _sent_signals[signal_key] = (opp["net_apr"], time.time())
 
     # Итоговое сообщение
     min_apr = opps[-1]["net_apr"]
@@ -1732,6 +1755,7 @@ async def post_init(app):
     """Выполняется после запуска бота."""
     await init_db()
     await _load_settings()
+    await _load_alerts_cooldown()
 
     # Сброс антиспама при запуске — чтобы сразу пришли сигналы
     _sent_signals.clear()
