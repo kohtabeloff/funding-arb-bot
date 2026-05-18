@@ -75,17 +75,22 @@ async def send_pair_signal(opp: dict, size_usd: float = 0) -> None:
 
     avg_apr_24h = opp.get("avg_apr_24h")
     streak_avg_apr = opp.get("streak_avg_apr")
+
+    # Стрик показываем только если среднее за его период положительное.
+    # Отрицательное среднее = фандинг шёл в другую сторону → стрик вводит в заблуждение.
+    streak_is_valid = pair_streak and (streak_avg_apr is None or streak_avg_apr > 0)
+
     apr_history_lines = ""
     if avg_apr_24h is not None:
         apr_history_lines += f"\n📊 Среднее за 24ч: <code>{avg_apr_24h:+.1f}%</code>"
-    if streak_avg_apr is not None and pair_streak:
+    if streak_avg_apr is not None and streak_is_valid:
         apr_history_lines += f"\n📈 Среднее за стрик ({_pair_streak_str(pair_streak).strip()}): <code>{streak_avg_apr:+.1f}%</code>"
 
     text = (
         f"🔀 <b>{esc(symbol)}</b> — {esc(exch_a)} × {esc(exch_b)}\n\n"
         f"{esc(exch_a)} ({dir_a_str}): <code>{eff_a:+.1f}%</code>\n"
         f"{esc(exch_b)} ({dir_b_str}): <code>{eff_b:+.1f}%</code>\n"
-        f"{MSG['signal_net_apr']}: ~{net_apr:.1f}% APR{_pair_streak_str(pair_streak)}"
+        f"{MSG['signal_net_apr']}: ~{net_apr:.1f}% APR{_pair_streak_str(pair_streak) if streak_is_valid else ''}"
         f"{apr_history_lines}"
         f"{spread_lines}\n\n"
         f"💸 {esc(exch_a)}: {fee_a} {MSG['signal_fee']} | {esc(exch_b)}: {fee_b}"

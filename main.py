@@ -191,8 +191,12 @@ async def _save_settings():
 # Отслеживаем сколько часов держится положительный Net APR для каждой пары.
 # Дипы короче FUNDING_DIP_TOLERANCE_HOURS игнорируются.
 
-def _pair_key(exch_a: str, exch_b: str, symbol: str) -> str:
+def _pair_key(exch_a: str, exch_b: str, symbol: str, dir_a: str | None = None) -> str:
     a, b = sorted([exch_a, exch_b])
+    if dir_a is not None:
+        # Приводим направление к канонической форме: всегда относительно алфавитно-первой биржи
+        canonical_dir = dir_a if a == exch_a else ("LONG" if dir_a == "SHORT" else "SHORT")
+        return f"{a}:{b}:{symbol}:{canonical_dir}"
     return f"{a}:{b}:{symbol}"
 
 
@@ -203,7 +207,7 @@ def _update_pair_net_streaks(opps: list):
     current_keys = set()
 
     for opp in opps:
-        key = _pair_key(opp["exchange_a"], opp["exchange_b"], opp["symbol"])
+        key = _pair_key(opp["exchange_a"], opp["exchange_b"], opp["symbol"], opp["dir_a"])
         current_keys.add(key)
 
         if key not in _funding_streak:
@@ -233,18 +237,18 @@ def _update_pair_net_streaks(opps: list):
                 streak["positive_since"] = None  # стрик сброшен
 
 
-def get_pair_streak_hours(exch_a: str, exch_b: str, symbol: str) -> float | None:
+def get_pair_streak_hours(exch_a: str, exch_b: str, symbol: str, dir_a: str | None = None) -> float | None:
     """Сколько часов Net APR пары держится положительным. None если данных нет."""
-    key = _pair_key(exch_a, exch_b, symbol)
+    key = _pair_key(exch_a, exch_b, symbol, dir_a)
     streak = _funding_streak.get(key)
     if not streak or streak.get("positive_since") is None:
         return None
     return (time.time() - streak["positive_since"]) / 3600
 
 
-def get_pair_streak_since(exch_a: str, exch_b: str, symbol: str) -> float | None:
+def get_pair_streak_since(exch_a: str, exch_b: str, symbol: str, dir_a: str | None = None) -> float | None:
     """Возвращает timestamp начала текущего стрика. None если данных нет."""
-    key = _pair_key(exch_a, exch_b, symbol)
+    key = _pair_key(exch_a, exch_b, symbol, dir_a)
     streak = _funding_streak.get(key)
     if not streak or streak.get("positive_since") is None:
         return None
@@ -428,18 +432,29 @@ async def _monitor_open_pairs(exchange_rates: dict):
             return f"{l['exchange']} <code>{rates_map.get(key, dummy).apr:+.1f}%</code>"
 
         # ── Проверка APR ─────────────────────────────────────────────────────
-        if not _protection_enabled:
-            continue
-
         if net_apr < _neg_apr_hard_close:
-            logger.warning(f"Автозакрытие {symbol}: нетто APR={net_apr:.1f}%")
             _negative_funding_since.pop(pair_id, None)
             apr_details = " | ".join(_leg_apr_str(l) for l in legs)
-            await _auto_close_pair(
-                pair_id, symbol, legs,
-                reason=MSG["auto_close_reason_neg_apr"].format(apr=net_apr, threshold=_neg_apr_hard_close, details=apr_details),
-            )
-            continue
+            if _protection_enabled:
+                logger.warning(f"Автозакрытие {symbol}: нетто APR={net_apr:.1f}%")
+                await _auto_close_pair(
+                    pair_id, symbol, legs,
+                    reason=MSG["auto_close_reason_neg_apr"].format(apr=net_apr, threshold=_neg_apr_hard_close, details=apr_details),
+                )
+                continue
+            else:
+                alert_key = f"alert:{pair_id}:hard_apr"
+                if time.time() - _liq_alerts_sent.get(alert_key, 0) >= LIQ_ALERT_COOLDOWN_SECONDS:
+                    _liq_alerts_sent[alert_key] = time.time()
+                    keyboard = InlineKeyboardMarkup([[
+                        InlineKeyboardButton("❌ Закрыть пару", callback_data=f"close_pair:{pair_id}:{symbol}"),
+                    ]])
+                    await send_message(
+                        f"⚠️ <b>{symbol}</b>: нетто APR упал до <code>{net_apr:.1f}%</code> (порог {_neg_apr_hard_close:.0f}%)\n"
+                        f"{apr_details}\n\n"
+                        f"🛡 Защита выключена — автозакрытие не выполнено.",
+                        reply_markup=keyboard,
+                    )
 
         elif net_apr < 0:
             if pair_id not in _negative_funding_since:
@@ -461,13 +476,14 @@ async def _monitor_open_pairs(exchange_rates: dict):
             else:
                 hours_waited = (time.time() - _negative_funding_since[pair_id]) / 3600
                 if hours_waited >= _neg_apr_hours:
-                    logger.warning(f"Автозакрытие {symbol}: фандинг в минусе {hours_waited:.1f}ч")
                     _negative_funding_since.pop(pair_id, None)
-                    await _auto_close_pair(
-                        pair_id, symbol, legs,
-                        reason=MSG["auto_close_reason_neg_wait"].format(apr=net_apr, hours=hours_waited),
-                    )
-                    continue
+                    if _protection_enabled:
+                        logger.warning(f"Автозакрытие {symbol}: фандинг в минусе {hours_waited:.1f}ч")
+                        await _auto_close_pair(
+                            pair_id, symbol, legs,
+                            reason=MSG["auto_close_reason_neg_wait"].format(apr=net_apr, hours=hours_waited),
+                        )
+                        continue
         else:
             _negative_funding_since.pop(pair_id, None)
 
@@ -486,14 +502,15 @@ async def _monitor_open_pairs(exchange_rates: dict):
                     distance_pct = abs(mark_price - liq_price) / mark_price * 100
 
                     if distance_pct < LIQ_AUTO_CLOSE_PCT:
-                        await _auto_close_pair(
-                            pair_id, symbol, legs,
-                            reason=MSG["auto_close_reason_liq"].format(
-                                exchange=exch_name, distance=distance_pct, threshold=LIQ_AUTO_CLOSE_PCT,
-                                mark=mark_price, liq=liq_price, leverage=leverage,
-                            ),
-                        )
-                        break
+                        if _protection_enabled:
+                            await _auto_close_pair(
+                                pair_id, symbol, legs,
+                                reason=MSG["auto_close_reason_liq"].format(
+                                    exchange=exch_name, distance=distance_pct, threshold=LIQ_AUTO_CLOSE_PCT,
+                                    mark=mark_price, liq=liq_price, leverage=leverage,
+                                ),
+                            )
+                            break
 
                     elif distance_pct < LIQ_WARN_PCT:
                         alert_key = f"liq:{pair_id}:{exch_name}:warn"
@@ -525,14 +542,15 @@ async def _monitor_open_pairs(exchange_rates: dict):
                         direction_str = MSG["price_went_down"] if leg["direction"] == "LONG" else MSG["price_went_up"]
 
                         if loss_pct >= _price_close_pct:
-                            await _auto_close_pair(
-                                pair_id, symbol, legs,
-                                reason=MSG["auto_close_reason_price"].format(
-                                    exchange=exch_name, direction=leg["direction"], direction_str=direction_str,
-                                    loss=loss_pct, entry=entry, current=cur_price,
-                                ),
-                            )
-                            break
+                            if _protection_enabled:
+                                await _auto_close_pair(
+                                    pair_id, symbol, legs,
+                                    reason=MSG["auto_close_reason_price"].format(
+                                        exchange=exch_name, direction=leg["direction"], direction_str=direction_str,
+                                        loss=loss_pct, entry=entry, current=cur_price,
+                                    ),
+                                )
+                                break
 
                         elif loss_pct > PRICE_WARN_PCT:
                             alert_key = f"liq:{pair_id}:{exch_name}:price"
@@ -556,6 +574,9 @@ async def _monitor_open_pairs(exchange_rates: dict):
 
 async def _auto_close_pair(pair_id: str, symbol: str, legs: list, reason: str):
     """Автоматически закрывает пару и уведомляет."""
+    if not _protection_enabled:
+        logger.info(f"Автозакрытие {pair_id} отменено — защита выключена")
+        return
     try:
         if not legs:
             legs = await get_positions_by_pair(pair_id)
@@ -598,7 +619,7 @@ async def _enrich_opp_with_streaks(opp: dict) -> dict:
     exch_a, exch_b, symbol = opp["exchange_a"], opp["exchange_b"], opp["symbol"]
     dir_a, dir_b = opp["dir_a"], opp["dir_b"]
 
-    opp["pair_streak"] = get_pair_streak_hours(exch_a, exch_b, symbol)
+    opp["pair_streak"] = get_pair_streak_hours(exch_a, exch_b, symbol, dir_a)
 
     def _net_apr(avg_a, avg_b):
         if avg_a is None or avg_b is None:
@@ -614,7 +635,7 @@ async def _enrich_opp_with_streaks(opp: dict) -> dict:
     )
     opp["avg_apr_24h"] = _net_apr(avg_a_24h, avg_b_24h)
 
-    streak_since = get_pair_streak_since(exch_a, exch_b, symbol)
+    streak_since = get_pair_streak_since(exch_a, exch_b, symbol, dir_a)
     if streak_since:
         avg_a_streak, avg_b_streak = await asyncio.gather(
             get_avg_apr_since(exch_a, symbol, streak_since),
@@ -665,6 +686,7 @@ async def scan_and_notify():
 
 async def _scan_and_notify_inner():
     logger.info("Запуск сканирования...")
+    await _load_settings()
 
     exchange_rates = await fetch_all_rates()
     if not exchange_rates:
